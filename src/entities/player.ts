@@ -53,9 +53,12 @@ export class Player {
     this.controller.setSlideEnabled(true);
   }
 
+  get alive(): boolean { return this.health > 0; }
+
   /** Movement + facing for one tick. Must be called before PhysicsWorld.step(). */
   update(cmd: InputCommand, dt: number): void {
     this.prevX = this.x; this.prevZ = this.z; this.prevYaw = this.yaw;
+    if (!this.alive) { cmd.moveX = cmd.moveZ = cmd.aimX = cmd.aimZ = 0; cmd.trigger = cmd.triggerTap = false; }
 
     // Accelerate toward the target velocity (snappy but not instant).
     const tx = cmd.moveX * PLAYER.moveSpeed, tz = cmd.moveZ * PLAYER.moveSpeed;

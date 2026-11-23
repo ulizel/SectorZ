@@ -10,7 +10,9 @@ import { InputManager } from './input/inputManager';
 import { Player } from './entities/player';
 import { ZombieManager } from './entities/zombieManager';
 import type { Zombie } from './entities/zombie';
-import { ZombieView } from './render/zombieView';
+import { ZombieRenderer } from './render/zombieRenderer';
+import { ZombieAI, AI as AI_CFG, type AttackResult } from './ai/zombieAI';
+import { ARENA } from './config';
 import { Group, groups, ALL, PhysicsWorld, MATERIAL_COST } from './physics/physicsWorld';
 import { Renderer } from './render/renderer';
 import { HumanoidRig, SURVIVOR_LOOK } from './render/humanoidRig';
@@ -67,7 +69,7 @@ export class Game {
   private visYaw = 0;
   private time = 0;
   private readonly weaponEvents: WeaponEvent[] = [];
-  readonly stats = { shots: 0, hits: 0, ticks: 0, maxImpactSpeed: 0, penetrations: 0, activeReloads: 0, zombieHits: 0, kills: 0, dismembers: 0 };
+  readonly stats = { shots: 0, hits: 0, ticks: 0, maxImpactSpeed: 0, penetrations: 0, activeReloads: 0, zombieHits: 0, kills: 0, dismembers: 0, damageTaken: 0 };
   private readonly penSkip = new Set<number>();
   private readonly holes: BulletHoles;
   private readonly blood: BulletHoles;
@@ -78,8 +80,16 @@ export class Game {
   private readonly retMat: THREE.MeshBasicMaterial;
 
   readonly zombies: ZombieManager;
-  private readonly zombieViews = new Map<Zombie, ZombieView>();
-  private readonly sinking: ZombieView[] = [];
+  private readonly zombieRenderer: ZombieRenderer;
+  readonly ai: ZombieAI;
+  private readonly attacks: AttackResult[] = [];
+  /** Survival mode (PLAY): keep a trickle of hunting zombies coming. Off in the Lab / tests. */
+  survival = true;
+  private spawnT = 0;
+  private hurtT = 0;
+  private readonly hurtEl = document.getElementById('hurt')!;
+  private readonly deadEl = document.getElementById('dead')!;
+  private deathShown = false;
   lab = false;
 
   constructor(container: HTMLElement, touchLayer: HTMLElement, reloadBtn: HTMLElement, switchBtn: HTMLElement, readonly quality: QualityPreset) {
@@ -91,6 +101,9 @@ export class Game {
     const scene = this.renderer.scene;
 
     this.props = buildArena(scene, this.physics);
+    this.ai = new ZombieAI(this.physics, ARENA.size);
+    this.zombieRenderer = new ZombieRenderer(scene);
+    void ({} as Zombie);
     this.propStart = this.props.map((p) => { const t = p.body.translation(); return new THREE.Vector3(t.x, t.y, t.z); });
     this.player = new Player(1, this.physics, 0, 2);
     scene.add(this.rig.root);
@@ -211,6 +224,11 @@ export class Game {
     this.aiming = cmd.aiming;
 
     this.player.update(cmd, dt);
+    // Zombie AI: chase, attack. Hits land on the player.
+    const p0 = this.player;
+    this.ai.update(dt, { x: p0.x, z: p0.z, alive: p0.alive }, this.zombies.zombies, this.attacks);
+    for (const a of this.attacks) this.damagePlayer(a.damage, a.zombie.x, a.zombie.z);
+    if (this.survival && !this.lab) this.survivalSpawns(dt);
     this.zombies.update(dt);
     this.aim.updateBloom(def, Math.min(1, this.player.speed / PLAYER.moveSpeed), dt);
     this.player.weapon.update(dt, cmd.trigger, cmd.triggerTap, cmd.reload, this.weaponEvents);
@@ -295,6 +313,7 @@ export class Game {
       p.vx -= dx * def.pushback; p.vz -= dz * def.pushback;
     }
     this.aim.onShot(def, p.weapon.burst);
+    this.ai.noise(p.x, p.z, AI_CFG.hearShotRange, this.zombies.zombies); // gunshots draw the horde
   }
 
   // ───────────────────────────── presentation ─────────────────────────────
@@ -510,15 +529,11 @@ export class Game {
 
   private syncZombieViews(dt: number): void {
     const zm = this.zombies;
-    for (const z of zm.spawned) this.zombieViews.set(z, new ZombieView(this.renderer.scene, z));
     zm.spawned.length = 0;
-    for (const z of zm.removed) {
-      const view = this.zombieViews.get(z);
-      if (view) { this.zombieViews.delete(z); this.sinking.push(view); }
-    }
-    zm.removed.length = 0;
-    for (const view of this.zombieViews.values()) view.update(dt);
-    for (let i = this.sinking.length - 1; i >= 0; i--) if (this.sinking[i].sinkStep(dt)) this.sinking.splice(i, 1);
+    this.zombieRenderer.sync(dt, zm.zombies, zm.removed);
+    // Hurt vignette fades out; death screen after the fall.
+    if (this.hurtT > 0) { this.hurtT -= dt; this.hurtEl.style.opacity = String(Math.max(0, this.hurtT * 2)); }
+    if (!this.player.alive && !this.deathShown) { this.deathShown = true; this.showDeath(); }
     // Severed stumps spurt blood for a moment.
     for (const b of zm.bleeders) {
       if (Math.random() > 0.55) continue;
@@ -527,6 +542,58 @@ export class Game {
       const lv = b.body.linvel();
       this.debris.emit(v3.x, v3.y, v3.z, lv.x * 0.5 + (Math.random() - 0.5) * 1.5, lv.y * 0.5 + Math.random() * 1.5,
         lv.z * 0.5 + (Math.random() - 0.5) * 1.5, 0.04 + Math.random() * 0.04, 1.5, Math.random() < 0.5 ? 0x8a0e12 : 0x5c070a, 0.1, 12, 0.6);
+    }
+  }
+
+  /** A zombie's strike landed. */
+  private damagePlayer(dmg: number, fromX: number, fromZ: number): void {
+    const p = this.player;
+    if (!p.alive) return;
+    p.health = Math.max(0, p.health - dmg);
+    // Knock the player back a little away from the attacker.
+    const dx = p.x - fromX, dz = p.z - fromZ, d = Math.hypot(dx, dz) || 1;
+    p.vx += (dx / d) * 2.5; p.vz += (dz / d) * 2.5;
+    this.hurtT = 0.45;
+    this.renderer.addShake(0.35);
+    this.sfx.playerHurt();
+    this.stats.damageTaken += dmg;
+  }
+
+  private showDeath(): void {
+    this.deadEl.querySelector('.kills')!.textContent = `${this.stats.kills} kills`;
+    this.deadEl.classList.add('on');
+    this.sfx.playerDeath();
+  }
+
+  /** Reset the run: clear zombies, heal, refill. */
+  restart(): void {
+    this.zombies.clear();
+    const p = this.player;
+    p.health = PLAYER.maxHealth;
+    p.body.setNextKinematicTranslation({ x: 0, y: p.body.translation().y, z: 2 });
+    p.x = p.prevX = 0; p.z = p.prevZ = 2; p.vx = p.vz = 0;
+    for (const w of p.weapons) { w.ammo = w.def.magSize; w.cancelReload(); }
+    this.stats.kills = 0;
+    this.deathShown = false;
+    this.deadEl.classList.remove('on');
+    this.spawnT = 1.5;
+    if (this.lab) this.spawnZombies(5);
+  }
+
+  /** Survival (PLAY mode): keep up to N hunting zombies coming from out of sight. */
+  private survivalSpawns(dt: number): void {
+    this.spawnT -= dt;
+    if (this.spawnT > 0 || !this.player.alive) return;
+    this.spawnT = 2.2;
+    const max = this.quality.name === 'mobile' ? 8 : 12;
+    if (this.zombies.aliveCount >= max) return;
+    const p = this.player;
+    for (let tries = 0; tries < 20; tries++) {
+      const x = (Math.random() - 0.5) * (ARENA.size - 4), z = (Math.random() - 0.5) * (ARENA.size - 4);
+      if (Math.hypot(x - p.x, z - p.z) < 12 || this.ai.nav.isBlocked(x, z)) continue;
+      const zb = this.zombies.spawn(x, z, Math.atan2(p.x - x, p.z - z));
+      this.ai.alertAll([zb]);
+      return;
     }
   }
 
@@ -566,6 +633,7 @@ export class Game {
       prop.body.applyTorqueImpulse({ x: (Math.random() - 0.5) * f * 0.3, y: 0, z: (Math.random() - 0.5) * f * 0.3 }, true);
     }
     this.events.emit('explosion', { x, y, z, radius });
+    this.ai.noise(x, z, 30, this.zombies.zombies);
   }
 
   /** Snapshot for automated tests and the debug console. */
@@ -585,6 +653,7 @@ export class Game {
       activeReloads: this.stats.activeReloads, steady: this.aim.steady,
       zombiesAlive: this.zombies.aliveCount, ragdolls: this.zombies.ragdollCount, severed: this.zombies.severedCount,
       zombieHits: this.stats.zombieHits, kills: this.stats.kills, dismembers: this.stats.dismembers,
+      damageTaken: this.stats.damageTaken, playerAlive: this.player.alive, crawlers: this.zombies.zombies.filter((z) => z.crawler && z.alive).length,
       fps: this.debug.fps, physicsMs: this.debug.avgPhysicsMs,
       bodies: this.physics.bodyCount,
     };

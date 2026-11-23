@@ -1,0 +1,219 @@
+import { NavGrid } from './navGrid';
+import type { Zombie } from '../entities/zombie';
+import { PART_INDEX } from '../rigs/humanoid';
+import { angleDelta } from '../core/math';
+import { Group, groups, type PhysicsWorld } from '../physics/physicsWorld';
+
+/** Tunables for zombie behaviour. */
+export const AI = {
+  sightRange: 15,
+  hearShotRange: 22,
+  loseInterestAfter: 12, // s without sight/noise before giving up the chase
+  turnRate: 4, // rad/s
+  crawlSpeed: 0.55,
+  wanderSpeed: 0.45,
+  attackRange: 1.05, // start an attack when this close (m, centre to centre)
+  crawlAttackRange: 0.95,
+  strikeReach: 1.35, // hit lands if the player is still within this at the strike
+  windup: 0.5, // s (dodge window)
+  recover: 0.7,
+  damage: 12,
+  separation: 0.85, // personal space between zombies (m)
+};
+
+interface Brain {
+  mode: 'idle' | 'chase' | 'attack';
+  alert: number; // s of interest left
+  wanderX: number; wanderZ: number; wanderT: number;
+  attackT: number; struck: boolean;
+  sightT: number; // next line-of-sight check
+  canSee: boolean;
+  homeX: number; homeZ: number;
+}
+
+export interface AITarget { x: number; z: number; alive: boolean }
+export interface AttackResult { zombie: Zombie; damage: number }
+
+const tmp = { x: 0, z: 0 };
+
+/**
+ * Zombie behaviour: senses (sight + gunshot noise), flow-field chasing around obstacles,
+ * crowd separation, wall sliding, wind-up/strike attacks, crawlers. Operates on any
+ * Zombie in the 'alive' state (knocked/ragdoll states are handled by physics).
+ */
+export class ZombieAI {
+  readonly nav: NavGrid;
+  private flowT = 0;
+  /** Spatial hash for neighbour queries. */
+  private readonly hash = new Map<number, Zombie[]>();
+  enabled = true;
+
+  constructor(private readonly physics: PhysicsWorld, arenaSize: number) {
+    this.nav = new NavGrid(physics, arenaSize);
+  }
+
+  private brain(z: Zombie): Brain {
+    if (!z.brain) {
+      z.brain = {
+        mode: 'idle', alert: 0, wanderX: z.x, wanderZ: z.z, wanderT: 0, attackT: 0, struck: false,
+        sightT: Math.random() * 0.5, canSee: false, homeX: z.x, homeZ: z.z,
+      } satisfies Brain;
+    }
+    return z.brain as Brain;
+  }
+
+  /** Make every zombie within `radius` aware of the player (gunshots, explosions). */
+  noise(x: number, z: number, radius: number, zombies: Zombie[]): void {
+    for (const zb of zombies) {
+      if (!zb.alive) continue;
+      if (Math.hypot(zb.x - x, zb.z - z) < radius) {
+        const b = this.brain(zb);
+        b.alert = AI.loseInterestAfter;
+        if (b.mode === 'idle') b.mode = 'chase';
+      }
+    }
+  }
+
+  /** Alert every zombie (e.g. survival spawns come straight for you). */
+  alertAll(zombies: Zombie[]): void { for (const z of zombies) { const b = this.brain(z); b.alert = 1e9; b.mode = 'chase'; } }
+
+  update(dt: number, target: AITarget, zombies: Zombie[], attacks: AttackResult[]): void {
+    attacks.length = 0;
+    this.flowT -= dt;
+    if (this.flowT <= 0) { this.nav.setTarget(target.x, target.z); this.flowT = 0.2; }
+    // Spatial hash (2 m cells) of active zombies.
+    this.hash.clear();
+    for (const z of zombies) {
+      if (z.state !== 'alive') continue;
+      const k = this.key(z.x, z.z);
+      const list = this.hash.get(k);
+      if (list) list.push(z); else this.hash.set(k, [z]);
+    }
+    for (const z of zombies) {
+      if (z.state !== 'alive') { if (z.alive) z.speed = 0; continue; }
+      if (!this.enabled) { z.speed = 0; z.attackPose = 0; continue; }
+      this.think(z, dt, target, attacks);
+    }
+  }
+
+  private key(x: number, z: number): number { return (Math.floor(x / 2) + 512) * 4096 + (Math.floor(z / 2) + 512); }
+
+  private think(z: Zombie, dt: number, t: AITarget, attacks: AttackResult[]): void {
+    const b = this.brain(z);
+    const dx = t.x - z.x, dz = t.z - z.z;
+    const dist = Math.hypot(dx, dz);
+
+    // Senses: line of sight checked a few times per second (staggered across zombies).
+    b.sightT -= dt;
+    if (b.sightT <= 0) {
+      b.sightT = 0.4;
+      b.canSee = t.alive && dist < AI.sightRange && !this.physics.raycast(z.x, 1.4, z.z, dx / (dist || 1), 0, dz / (dist || 1),
+        Math.max(0.01, dist - 0.4), groups(Group.ZOMBIE, Group.STATIC));
+      if (b.canSee) { b.alert = AI.loseInterestAfter; if (b.mode === 'idle') b.mode = 'chase'; }
+    }
+    b.alert -= dt;
+    if (b.mode === 'chase' && (b.alert <= 0 || !t.alive)) b.mode = 'idle';
+
+    let speed = 0, dirX = 0, dirZ = 0;
+    const crawler = z.crawler;
+    const arms = (z.parts[PART_INDEX.upperArmL].severed ? 0 : 1) + (z.parts[PART_INDEX.upperArmR].severed ? 0 : 1);
+
+    if (b.mode === 'attack') {
+      b.attackT += dt;
+      const wind = AI.windup * (crawler ? 0.8 : 1);
+      z.attackPose = b.attackT < wind ? b.attackT / wind : 1 + (b.attackT - wind) / (AI.recover + 0.15);
+      // Track the target a little during the wind-up (committed during the strike).
+      if (b.attackT < wind * 0.7) this.turnToward(z, Math.atan2(dx, dz), dt * 0.6);
+      if (!b.struck && b.attackT >= wind) {
+        b.struck = true;
+        const facing = Math.abs(angleDelta(z.yaw, Math.atan2(dx, dz))) < 0.9;
+        if (t.alive && facing && dist < AI.strikeReach) {
+          // Fewer arms = weaker attack (armless zombies can only bite).
+          const dmg = AI.damage * (arms === 2 ? 1 : arms === 1 ? 0.65 : 0.4) * (crawler ? 0.7 : 1);
+          attacks.push({ zombie: z, damage: dmg });
+        }
+        // Lunge forward on the strike.
+        this.move(z, Math.sin(z.yaw), Math.cos(z.yaw), crawler ? 0.15 : 0.35, 1);
+      }
+      if (b.attackT >= wind + AI.recover) { b.mode = 'chase'; z.attackPose = 0; }
+      // Still keep personal space while attacking (others shove in beside, not inside).
+      this.separation(z, tmp);
+      if (tmp.x || tmp.z) this.move(z, tmp.x, tmp.z, Math.min(0.03, Math.hypot(tmp.x, tmp.z) * 0.08), dt);
+      z.speed = 0;
+      return;
+    }
+    z.attackPose = 0;
+
+    if (b.mode === 'chase') {
+      if (dist < (crawler ? AI.crawlAttackRange : AI.attackRange) && t.alive) {
+        b.mode = 'attack'; b.attackT = 0; b.struck = false;
+        z.speed = 0;
+        return;
+      }
+      speed = crawler ? AI.crawlSpeed : z.baseSpeed;
+      if (b.canSee && dist < 6) { dirX = dx / dist; dirZ = dz / dist; } // close and visible: straight at you
+      else if (this.nav.flow(z.x, z.z, tmp)) { dirX = tmp.x; dirZ = tmp.z; }
+      else { dirX = dx / (dist || 1); dirZ = dz / (dist || 1); }
+    } else {
+      // Idle: shuffle between nearby points.
+      b.wanderT -= dt;
+      if (b.wanderT <= 0 || Math.hypot(b.wanderX - z.x, b.wanderZ - z.z) < 0.4) {
+        b.wanderT = 3 + Math.random() * 4;
+        b.wanderX = b.homeX + (Math.random() - 0.5) * 6;
+        b.wanderZ = b.homeZ + (Math.random() - 0.5) * 6;
+      }
+      const wx = b.wanderX - z.x, wz = b.wanderZ - z.z, wl = Math.hypot(wx, wz) || 1;
+      dirX = wx / wl; dirZ = wz / wl;
+      speed = crawler ? AI.crawlSpeed * 0.5 : AI.wanderSpeed;
+    }
+
+    // Separation: don't stack into a blob.
+    this.separation(z, tmp);
+    const sx = tmp.x, sz = tmp.z;
+    dirX += sx * 3; dirZ += sz * 3;
+    const dl = Math.hypot(dirX, dirZ);
+    if (dl > 1e-4) { dirX /= dl; dirZ /= dl; }
+    // Turn toward the travel direction, and walk where we face (no moonwalking).
+    if (dl > 1e-4) this.turnToward(z, Math.atan2(dirX, dirZ), dt);
+    const facing = Math.max(0, Math.cos(angleDelta(z.yaw, Math.atan2(dirX, dirZ))));
+    const actual = this.move(z, dirX, dirZ, speed * dt * (0.35 + 0.65 * facing), dt);
+    z.speed = actual / dt;
+  }
+
+  /** Sum of push-away vectors from neighbours inside personal space. */
+  private separation(z: Zombie, out: { x: number; z: number }): void {
+    let sx = 0, sz = 0;
+    const kx = Math.floor(z.x / 2), kz = Math.floor(z.z / 2);
+    for (let ox = -1; ox <= 1; ox++) for (let oz = -1; oz <= 1; oz++) {
+      const list = this.hash.get((kx + ox + 512) * 4096 + (kz + oz + 512));
+      if (!list) continue;
+      for (const o of list) {
+        if (o === z) continue;
+        const ax = z.x - o.x, az = z.z - o.z;
+        const d = Math.hypot(ax, az);
+        if (d < AI.separation) {
+          // Exactly overlapping: push in a stable pseudo-random direction.
+          const ux = d > 1e-4 ? ax / d : Math.cos(z.id), uz = d > 1e-4 ? az / d : Math.sin(z.id);
+          const f = (AI.separation - d) / AI.separation;
+          sx += ux * f; sz += uz * f;
+        }
+      }
+    }
+    out.x = sx; out.z = sz;
+  }
+
+  private turnToward(z: Zombie, yaw: number, dt: number): void {
+    const d = angleDelta(z.yaw, yaw);
+    const step = AI.turnRate * dt;
+    z.yaw += Math.max(-step, Math.min(step, d));
+  }
+
+  /** Move with wall sliding against the inflated nav grid. Returns distance moved. */
+  private move(z: Zombie, dx: number, dz: number, dist: number, _dt: number): number {
+    const nx = z.x + dx * dist, nz = z.z + dz * dist;
+    if (!this.nav.isBlocked(nx, nz)) { z.x = nx; z.z = nz; return dist; }
+    if (!this.nav.isBlocked(nx, z.z)) { z.x = nx; return Math.abs(dx * dist); }
+    if (!this.nav.isBlocked(z.x, nz)) { z.z = nz; return Math.abs(dz * dist); }
+    return 0;
+  }
+}

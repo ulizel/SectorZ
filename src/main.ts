@@ -84,6 +84,9 @@ async function boot(): Promise<void> {
   startBtn.disabled = false;
   labBtn.disabled = false;
   startBtn.textContent = quality.name === 'mobile' ? 'TAP TO PLAY' : 'CLICK TO PLAY';
+  document.getElementById('restart')!.addEventListener('pointerup', () => game.restart());
+  // ?nozombies: no survival spawns (used by the movement/shooting smoke tests).
+  if (new URLSearchParams(location.search).has('nozombies')) game.survival = false;
   let started = false;
   const begin = (lab: boolean) => {
     if (started) return;
@@ -119,10 +122,14 @@ function enterLab(game: Game): void {
       (btn ?? document.querySelector('[data-lab="slow"]'))?.classList.toggle('on', game.loop.timeScale !== 1);
     },
     clear: () => game.zombies.clear(),
+    ai: (btn) => {
+      game.ai.enabled = !game.ai.enabled;
+      (btn ?? document.querySelector('[data-lab="ai"]'))?.classList.toggle('on', game.ai.enabled);
+    },
   };
   document.querySelectorAll<HTMLElement>('#lab-panel button').forEach((b) => {
     b.addEventListener('pointerdown', (e) => { e.stopPropagation(); e.preventDefault(); actions[b.dataset.lab!](b); });
   });
-  const keys: Record<string, string> = { KeyZ: 'spawn', KeyB: 'boom', KeyT: 'slow', KeyC: 'clear' };
+  const keys: Record<string, string> = { KeyZ: 'spawn', KeyB: 'boom', KeyT: 'slow', KeyC: 'clear', KeyI: 'ai' };
   addEventListener('keydown', (e) => { const a = keys[e.code]; if (a && !e.repeat) actions[a](); });
 }

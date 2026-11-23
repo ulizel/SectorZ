@@ -45,7 +45,7 @@ describe('ragdoll realism', () => {
     for (let s = 0; s < 180; s++) {
       run(1);
       for (const [i, sign] of [[PART_INDEX.upperArmL, 1], [PART_INDEX.upperArmR, -1]] as const) {
-        if (z.parts[i].severed) continue;
+        if (z.parts[i].severed || !z.ragdoll) continue; // only physics poses (not the crawl animation)
         const q = rel(z, i);
         const tw = new THREE.Quaternion(0, q.y, 0, q.w).normalize();
         const sw = q.clone().multiply(tw.invert());

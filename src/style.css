@@ -96,3 +96,14 @@ body.lab #lab-panel { display: flex; }
 #lab-panel button { background: var(--panel); color: var(--ink); border: 1px solid rgba(255,255,255,0.3); font: 700 12px var(--font);
   padding: 9px 10px; letter-spacing: 1px; touch-action: none; }
 #lab-panel button.on { background: var(--accent); }
+
+#hurt { position: fixed; inset: 0; z-index: 4; pointer-events: none; opacity: 0;
+  background: radial-gradient(ellipse at center, transparent 45%, rgba(170, 0, 0, 0.65) 100%); }
+#dead { position: fixed; inset: 0; z-index: 9; display: none; flex-direction: column; align-items: center; justify-content: center;
+  background: rgba(40, 0, 0, 0.55); text-align: center; }
+#dead.on { display: flex; animation: deadin 1.2s ease-out; }
+#dead h2 { font-size: clamp(36px, 10vw, 64px); margin: 0; letter-spacing: 6px; color: #ff5a45; text-shadow: 0 4px 0 #000; }
+#dead .kills { opacity: 0.8; margin: 8px 0 26px; }
+#restart { font: 700 18px var(--font); letter-spacing: 3px; color: var(--ink); background: var(--accent); border: none;
+  padding: 16px 30px; box-shadow: 0 5px 0 #8a2a1c; pointer-events: auto; touch-action: none; }
+@keyframes deadin { from { opacity: 0; } to { opacity: 1; } }

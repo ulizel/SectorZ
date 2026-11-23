@@ -110,6 +110,20 @@ export class Zombie {
   private t = Math.random() * 10;
   private readonly w: RAPIER.World;
   private stagger = new THREE.Vector3();
+  // ── Locomotion / AI-facing state (set by the AI system each tick) ──
+  /** Current ground speed (m/s); drives the walk cycle. */
+  speed = 0;
+  private walkPhase = Math.random() * 6;
+  /** Lost a leg: drags itself along on its arms. */
+  crawler = false;
+  /** Attack pose: 0 = none, 0..1 wind-up, 1..2 strike/recover. */
+  attackPose = 0;
+  /** Base walking speed (m/s) for this individual. */
+  readonly baseSpeed = 1.15 + Math.random() * 0.45;
+  /** Last transforms of each part (kept after physics removal so the renderer can sink it away). */
+  finalTransforms: { p: THREE.Vector3; q: THREE.Quaternion }[] | null = null;
+  /** AI blackboard (owned by the AI system). */
+  brain: unknown = null;
 
   constructor(private readonly physics: PhysicsWorld, public x: number, public z: number, public yaw: number) {
     this.w = physics.world;
@@ -180,20 +194,54 @@ export class Zombie {
     this.pose.root.rotation.set(0, this.yaw, 0);
     const fl = (n: PartName) => this.parts.length ? this.parts[HUMANOID.findIndex((d) => d.name === n)].flinch : 0;
     for (const part of this.parts) part.flinch *= Math.exp(-7 * dt);
+    if (this.crawler) { this.animateCrawl(dt); return; }
     // Big hits make the whole body reel back.
     const reel = Math.min(0.6, this.stagger.length() * 2.5);
-    p.pelvis.position.y = 0.8 + Math.sin(t * 1.3) * 0.015;
-    p.pelvis.rotation.set(0, Math.sin(t * 0.7) * 0.1, Math.sin(t * 0.9) * 0.04);
-    p.torso.rotation.set(0.35 + Math.sin(t * 1.1) * 0.05 - fl('torso') - fl('pelvis') * 0.5 - reel, 0, Math.sin(t * 0.8) * 0.06);
+    // Shambling walk: stride scales with speed, slight limp, arms bob.
+    const move = Math.min(1, this.speed / 1.4);
+    this.walkPhase += this.speed * dt * 3.2;
+    const ph = this.walkPhase, sw = Math.sin(ph) * 0.65 * move;
+    // Attack: wind-up raises the arms back, strike throws them forward with a lunge.
+    const ap = this.attackPose;
+    const wind = ap > 0 && ap <= 1 ? ap : ap > 1 ? Math.max(0, 1 - (ap - 1) * 4) : 0;
+    const strike = ap > 1 ? Math.sin(Math.min(1, (ap - 1) * 2.5) * Math.PI) : 0;
+    p.pelvis.position.y = 0.8 + Math.sin(t * 1.3) * 0.015 - Math.abs(Math.cos(ph)) * 0.04 * move;
+    p.pelvis.rotation.set(0, Math.sin(t * 0.7) * 0.1 + sw * 0.15, Math.sin(t * 0.9) * 0.04 + Math.sin(ph) * 0.06 * move);
+    p.torso.rotation.set(0.35 + 0.1 * move + Math.sin(t * 1.1) * 0.05 - fl('torso') - fl('pelvis') * 0.5 - reel - wind * 0.3 + strike * 0.5,
+      0, Math.sin(t * 0.8) * 0.06 - sw * 0.08);
     p.head.rotation.set(-0.25 + Math.sin(t * 1.7) * 0.08 - fl('head') * 1.5, Math.sin(t * 0.6) * 0.3, Math.sin(t * 0.9) * 0.15);
-    p.upperArmL.rotation.set(-1.25 + Math.sin(t * 1.4) * 0.12 + fl('upperArmL') + reel, -0.1, 0.05);
-    p.upperArmR.rotation.set(-1.15 + Math.sin(t * 1.2 + 1) * 0.12 + fl('upperArmR') + reel, 0.1, -0.05);
-    p.forearmL.rotation.set(-0.25 + fl('forearmL'), 0, 0);
-    p.forearmR.rotation.set(-0.4 + fl('forearmR'), 0, 0);
-    p.thighL.rotation.set(-0.1 + fl('thighL') * 0.5, 0, 0.04);
-    p.thighR.rotation.set(0.05 + fl('thighR') * 0.5, 0, -0.04);
-    p.shinL.rotation.set(0.15 + fl('shinL') * 0.5, 0, 0);
-    p.shinR.rotation.set(0.1 + fl('shinR') * 0.5, 0, 0);
+    const armBob = Math.sin(ph * 2) * 0.08 * move;
+    p.upperArmL.rotation.set(-1.25 + Math.sin(t * 1.4) * 0.12 + fl('upperArmL') + reel + armBob - wind * 1.0 + strike * 0.6, -0.1, 0.05 + wind * 0.3);
+    p.upperArmR.rotation.set(-1.15 + Math.sin(t * 1.2 + 1) * 0.12 + fl('upperArmR') + reel - armBob - wind * 1.0 + strike * 0.6, 0.1, -0.05 - wind * 0.3);
+    p.forearmL.rotation.set(-0.25 + fl('forearmL') - wind * 0.8, 0, 0);
+    p.forearmR.rotation.set(-0.4 + fl('forearmR') - wind * 0.8, 0, 0);
+    p.thighL.rotation.set(-0.1 - sw + fl('thighL') * 0.5, 0, 0.04);
+    p.thighR.rotation.set(0.05 + sw * 0.8 + fl('thighR') * 0.5, 0, -0.04); // shorter stride: a limp
+    p.shinL.rotation.set(0.15 + Math.max(0, Math.sin(ph + 1.3)) * 0.8 * move + fl('shinL') * 0.5, 0, 0);
+    p.shinR.rotation.set(0.1 + Math.max(0, Math.sin(ph + Math.PI + 1.3)) * 0.6 * move + fl('shinR') * 0.5, 0, 0);
+    this.pose.root.updateMatrixWorld(true);
+  }
+
+  /** Prone crawl: face down, pulling itself forward with alternating arm reaches. */
+  private animateCrawl(dt: number): void {
+    const p = this.pose.parts;
+    this.walkPhase += Math.max(0.6, this.speed) * dt * 3.5;
+    const ph = this.walkPhase;
+    const ap = this.attackPose;
+    const grab = ap > 1 ? Math.sin(Math.min(1, (ap - 1) * 2.5) * Math.PI) : 0;
+    p.pelvis.position.y = 0.13;
+    p.pelvis.rotation.set(Math.PI / 2 - 0.08, 0, Math.sin(ph) * 0.08);
+    p.torso.rotation.set(-0.15 + Math.sin(ph * 2) * 0.05, Math.sin(ph) * 0.12, 0);
+    p.head.rotation.set(-0.9 + Math.sin(ph * 2) * 0.1, 0, 0); // looking up at you
+    const reachL = Math.sin(ph), reachR = Math.sin(ph + Math.PI);
+    p.upperArmL.rotation.set(-2.6 - reachL * 0.45 - grab * 0.3, 0, 0.35);
+    p.upperArmR.rotation.set(-2.6 - reachR * 0.45 - grab * 0.3, 0, -0.35);
+    p.forearmL.rotation.set(-0.6 + Math.max(0, reachL) * 0.5, 0, 0);
+    p.forearmR.rotation.set(-0.6 + Math.max(0, reachR) * 0.5, 0, 0);
+    p.thighL.rotation.set(0.1 + Math.sin(ph) * 0.1, 0, 0.12);
+    p.thighR.rotation.set(0.1 - Math.sin(ph) * 0.1, 0, -0.12);
+    p.shinL.rotation.set(0.2, 0, 0);
+    p.shinR.rotation.set(0.2, 0, 0);
     this.pose.root.updateMatrixWorld(true);
   }
 
@@ -382,8 +430,13 @@ export class Zombie {
       p.body.setAngularDamping(0.15);
       p.body.applyTorqueImpulse({ x: (Math.random() - 0.5) * 0.4, y: (Math.random() - 0.5) * 0.4, z: (Math.random() - 0.5) * 0.4 }, true);
     }
-    // Losing the head or a leg drops the zombie (crawlers come in a later phase).
-    if (n === 'head' || n.startsWith('thigh') || n.startsWith('shin')) this.kill(dt);
+    if (n === 'head') this.kill(dt);
+    else if ((n.startsWith('thigh') || n.startsWith('shin')) && this.alive) {
+      // Lost a leg: falls, then drags itself on as a crawler.
+      this.crawler = true;
+      this.hp = Math.min(this.hp, ZOMBIE_MAX_HP * 0.6);
+      if (this.state === 'alive' || this.state === 'gettingUp') this.knockDown(dt);
+    }
     return true;
   }
 
@@ -436,8 +489,12 @@ export class Zombie {
     this.restTime = 0;
   }
 
-  /** Remove all physics objects. */
+  /** Remove all physics objects (final pose is kept for the renderer). */
   destroy(): void {
+    this.finalTransforms = this.parts.map((p) => {
+      const t = p.body.translation(), r = p.body.rotation();
+      return { p: new THREE.Vector3(t.x, t.y, t.z), q: new THREE.Quaternion(r.x, r.y, r.z, r.w) };
+    });
     for (const p of this.parts) {
       this.physics.materials.delete(p.collider.handle);
       this.w.removeRigidBody(p.body); // also removes its colliders and joints

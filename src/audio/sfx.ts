@@ -87,6 +87,8 @@ export class Sfx {
     this.burst(0.12, 380, 1, 0.55 * volume);
     this.tone(90, 45, 0.1, 0.4 * volume);
   }
+  playerHurt(): void { this.burst(0.15, 700, 1, 0.5); this.tone(160, 90, 0.18, 0.35, 'sawtooth'); }
+  playerDeath(): void { this.tone(220, 40, 1.2, 0.5, 'sawtooth'); this.burst(0.8, 300, 0.7, 0.5); }
   dismember(): void { this.burst(0.18, 600, 1, 0.6); this.tone(80, 40, 0.2, 0.5); this.burst(0.25, 1800, 0.8, 0.25, 'lowpass', 0.05); }
   explosion(): void {
     this.burst(0.9, 600, 0.5, 1.2);

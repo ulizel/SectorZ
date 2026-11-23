@@ -66,7 +66,7 @@ async function desktop(browser) {
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
   await throttle(page);
-  await page.goto(`${BASE}?quality=desktop`);
+  await page.goto(`${BASE}?quality=desktop&nozombies`);
   await page.waitForSelector('#start:not([disabled])', { timeout: 30000 });
   await page.screenshot({ path: `${OUT}/desktop-title.png` });
   await page.click('#start');
@@ -148,7 +148,7 @@ async function phone(browser, deviceName, landscape) {
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await throttle(page, ctx);
-  await page.goto(BASE);
+  await page.goto(`${BASE}?nozombies`);
   await page.waitForSelector('#start:not([disabled])', { timeout: 30000 });
   check('touch device detected → mobile quality + touch UI', await page.evaluate(() => document.body.classList.contains('touch')));
   await page.tap('#start');
@@ -305,6 +305,7 @@ async function ragdollLab(browser) {
   await waitReady(page);
   await ticks(page, 20);
   check('lab spawns 5 zombies', (await state(page)).zombiesAlive === 5);
+  await page.evaluate(() => { window.__SECTORZ__.game.ai.enabled = false; }); // stationary targets for the shooting checks
   // Two zombies in a line straight ahead: one pistol round should pass through the first into the second.
   await page.evaluate(() => {
     const g = window.__SECTORZ__.game;
@@ -336,6 +337,13 @@ async function ragdollLab(browser) {
   const parts = await page.evaluate(() => window.__SECTORZ__.game.zombies.zombies.flatMap((z) => z.parts.map((p) => p.body.translation().y)));
   check('no ragdoll part through the floor or NaN', parts.every((y) => Number.isFinite(y) && y > 0), `min y=${Math.min(...parts).toFixed(3)}`);
   check('physics step within budget', d.physicsMs < 8, `avg ${d.physicsMs.toFixed(2)} ms`);
+  // AI: hunting zombies reach the player and attack.
+  await page.evaluate(() => { const g = window.__SECTORZ__.game; g.zombies.clear(); g.ai.enabled = true; g.spawnZombies(4); });
+  await ticks(page, 60);
+  await page.screenshot({ path: `${OUT}/ai-chase.png` });
+  await ticks(page, 360);
+  const e = await state(page);
+  check('zombies chase and attack the player', e.damageTaken > 0, `damage taken=${e.damageTaken.toFixed(0)}`);
   check('no JS errors (lab)', errors.length === 0, errors.join(' | '));
   await page.close();
 }
