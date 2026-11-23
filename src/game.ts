@@ -921,8 +921,9 @@ export class Game {
       let dx = t.x - x, dz = t.z - z;
       const d = Math.max(0.5, Math.hypot(dx, dz));
       if (d > radius) continue;
-      // Explosive barrels in range catch the blast and go off moments later (chain reaction).
-      if (prop.explosive) this.ignite(prop, 0.15 + Math.random() * 0.25);
+      // Explosive barrels in range catch the blast and go off moments later (chain reaction),
+      // late enough for the player to see the danger zone and step out.
+      if (prop.explosive) this.ignite(prop, 0.6 + Math.random() * 0.3);
       const f = (1 - d / radius) * 220;
       dx /= d; dz /= d;
       prop.body.applyImpulse({ x: dx * f, y: f * 0.8, z: dz * f }, true);
