@@ -1,7 +1,8 @@
 /**
  * Pure state machine for the right-hand (aim) stick. No DOM, so it is unit-tested directly.
  *
- *  - Touch down: nothing happens yet (taps are ignored).
+ *  - Quick tap (< TAP_MAX s, never left the deadzone) → one "tap shot" along the current aim.
+ *  - Holding inside the deadzone, then lifting → nothing (cancel).
  *  - Drag past the deadzone → `aiming` (aim line visible, automatic weapons fire).
  *  - Drag back inside the deadzone → aiming cancelled (line hidden, firing stops).
  *  - Lift while aiming → one queued "release shot" along the last aimed direction
@@ -12,6 +13,8 @@ const DEADZONE_EXIT = 0.24; // small hysteresis so the line doesn't flicker at t
 /** Automatic weapons: push past this deflection to fire (inside it you only aim). */
 export const FIRE_ZONE = 0.75;
 const FIRE_ZONE_EXIT = 0.68;
+/** A touch shorter than this (s) that never left the deadzone counts as a tap-to-fire. */
+export const TAP_MAX = 0.25;
 
 export class AimStickLogic {
   active = false;
@@ -23,10 +26,16 @@ export class AimStickLogic {
   /** Deflection beyond the deadzone, 0..1 (light push = fine aim). */
   mag = 0;
   private release: { x: number; y: number } | null = null;
+  private startTime = 0;
+  private everAimed = false;
+  private tapQueued = false;
 
-  start(): void {
+  /** `now` in seconds (for tap detection). */
+  start(now = 0): void {
     this.active = true;
     this.aiming = false;
+    this.everAimed = false;
+    this.startTime = now;
   }
 
   /** nx, ny: deflection normalised to the stick radius (screen space, +y down). */
@@ -36,6 +45,7 @@ export class AimStickLogic {
     const threshold = this.aiming ? DEADZONE_EXIT : AIM_DEADZONE;
     if (m >= threshold) {
       this.aiming = true;
+      this.everAimed = true;
       this.dirX = nx / m;
       this.dirY = ny / m;
       this.mag = Math.min(1, (m - AIM_DEADZONE) / (1 - AIM_DEADZONE));
@@ -46,11 +56,19 @@ export class AimStickLogic {
     }
   }
 
-  end(): void {
+  end(now = 0): void {
     if (this.active && this.aiming) this.release = { x: this.dirX, y: this.dirY };
+    else if (this.active && !this.everAimed && now - this.startTime < TAP_MAX) this.tapQueued = true;
     this.active = false;
     this.aiming = false;
     this.firing = false;
+  }
+
+  /** True once after a quick tap. */
+  consumeTap(): boolean {
+    const t = this.tapQueued;
+    this.tapQueued = false;
+    return t;
   }
 
   /** Returns the release-shot direction once, then clears it. */

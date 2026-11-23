@@ -188,7 +188,7 @@ async function phone(browser, deviceName, landscape) {
   await touch('touchEnd', []);
   await ticks(page, 10);
   const s2 = await state(page);
-  check('quick tap on right half does not fire', s2.shots === s1.shots, `shots=${s2.shots}`);
+  check('quick tap on right half fires one shot along the current aim', s2.shots - s1.shots === 1, `shots=${s2.shots - s1.shots}`);
 
   // 3. Pistol lift-to-fire: dragging shows only the aim line; lifting fires one shot.
   await touch('touchStart', [R]);

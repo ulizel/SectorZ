@@ -2,12 +2,32 @@ import { describe, it, expect } from 'vitest';
 import { AimStickLogic, AIM_DEADZONE, FIRE_ZONE } from '../src/input/aimStick';
 
 describe('AimStickLogic', () => {
-  it('a quick tap without dragging is ignored', () => {
+  it('a quick tap without dragging queues one tap-shot', () => {
     const a = new AimStickLogic();
-    a.start();
+    a.start(10);
     a.move(0.05, 0.02);
     expect(a.aiming).toBe(false);
-    a.end();
+    a.end(10.1);
+    expect(a.consumeRelease()).toBeNull();
+    expect(a.consumeTap()).toBe(true);
+    expect(a.consumeTap()).toBe(false); // once
+  });
+
+  it('holding inside the deadzone then lifting does nothing (not a tap)', () => {
+    const a = new AimStickLogic();
+    a.start(10);
+    a.end(10.6);
+    expect(a.consumeTap()).toBe(false);
+    expect(a.consumeRelease()).toBeNull();
+  });
+
+  it('a short flick that left the deadzone is a release shot, not a tap', () => {
+    const a = new AimStickLogic();
+    a.start(10);
+    a.move(0.8, 0);
+    a.move(0.1, 0); // back in: cancelled
+    a.end(10.1);
+    expect(a.consumeTap()).toBe(false);
     expect(a.consumeRelease()).toBeNull();
   });
 

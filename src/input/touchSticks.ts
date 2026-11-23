@@ -70,7 +70,7 @@ export class TouchSticks {
     stick.base.style.transform = `translate(${stick.ox - RADIUS}px, ${stick.oy - RADIUS}px)`;
     stick.base.classList.add('on');
     stick.knob.style.transform = 'translate(0px,0px)';
-    if (stick === this.right) this.aim.start();
+    if (stick === this.right) this.aim.start(performance.now() / 1000);
   }
 
   private onMove(e: PointerEvent): void {
@@ -106,7 +106,7 @@ export class TouchSticks {
       s.base.classList.remove('on', 'aiming', 'firing');
       if (s === this.right) {
         if (cancelled) this.aim.move(0, 0); // OS-cancelled touch (e.g. notification) never fires
-        this.aim.end();
+        this.aim.end(performance.now() / 1000);
       }
     }
   }
@@ -120,6 +120,7 @@ export class TouchSticks {
       out.moveX = (l.x / ll) * m;
       out.moveY = (l.y / ll) * m;
     }
+    if (this.aim.consumeTap()) out.stickTap = true;
     const release = this.aim.consumeRelease();
     if (release) {
       out.stickReleased = true;

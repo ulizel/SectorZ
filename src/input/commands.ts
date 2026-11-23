@@ -41,11 +41,13 @@ export interface RawInput {
   aimStickMag: number;
   /** Touch aim stick was lifted while aiming this tick (lift-to-fire). */
   stickReleased: boolean;
+  /** Quick tap on the aim side: fire once along the current aim. */
+  stickTap: boolean;
   reload: boolean;
   switchWeapon: number | null;
 }
 
 export const emptyRaw = (): RawInput => ({
   moveX: 0, moveY: 0, aimScreen: null, mouseHeld: false, mousePressed: false,
-  aimStick: null, stickAiming: false, stickFiring: false, aimStickMag: 0, stickReleased: false, reload: false, switchWeapon: null,
+  aimStick: null, stickAiming: false, stickFiring: false, aimStickMag: 0, stickReleased: false, stickTap: false, reload: false, switchWeapon: null,
 });

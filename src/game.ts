@@ -69,6 +69,7 @@ export class Game {
   private aiming = false;
   private stickAim = false;
   private stickMag = 1;
+  private stickHeld = 0; // s the aim stick has been dragging (ease-in)
   private stickTarget = 0; // where the thumb points (radians)
   private readonly aim = new AimModel();
   /** Lift-to-fire shot waiting for the aim to arrive at the thumb direction. */
@@ -201,6 +202,8 @@ export class Game {
       out.trigger = raw.mouseHeld;
       out.triggerTap = raw.mousePressed;
     }
+    // Quick tap on the aim side: one shot along the current (remembered) aim line.
+    if (raw.stickTap) { out.triggerTap = true; out.aimX = out.aimZ = 0; }
     out.reload = raw.reload;
     out.switchWeapon = raw.switchWeapon;
   }
@@ -216,10 +219,17 @@ export class Game {
     const turning = this.stickAim || this.pendingShot !== null;
     if (turning) {
       const target = this.pendingShot ? this.pendingShot.angle : this.stickTarget;
-      this.aim.turnToward(target, this.pendingShot ? 1 : this.stickMag, def, dt);
+      // Ease-in: a fresh drag starts turning gently and reaches full speed over AIM.easeIn s,
+      // so the first millimetres of thumb movement don't yank the aim off its last position.
+      this.stickHeld = this.stickAim ? this.stickHeld + dt : 0;
+      const k = Math.min(1, this.stickHeld / AIM.easeIn);
+      const ramp = this.pendingShot ? 1 : 0.12 + 0.88 * k * k * (3 - 2 * k);
+      this.aim.turnToward(target, this.pendingShot ? 1 : this.stickMag, def, dt * ramp);
     } else if (cmd.aimX !== 0 || cmd.aimZ !== 0) {
+      this.stickHeld = 0;
       this.aim.set(Math.atan2(cmd.aimX, cmd.aimZ), dt);
     } else {
+      this.stickHeld = 0;
       this.aim.hold(dt);
     }
     if (turning || cmd.aimX !== 0 || cmd.aimZ !== 0) { cmd.aimX = this.aim.x; cmd.aimZ = this.aim.z; }

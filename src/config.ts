@@ -29,6 +29,8 @@ export const AIM = {
   pendingShotMax: 0.25,
   /** "Arrived" tolerance for a pending lift-shot, radians (~2.3°). */
   arriveTolerance: 0.04,
+  /** Aim ease-in (s): a new drag ramps the turn speed up over this long. */
+  easeIn: 0.3,
 };
 
 export const ARENA = { size: 44, wallHeight: 1.6 };
