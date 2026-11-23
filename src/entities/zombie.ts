@@ -277,19 +277,19 @@ export class Zombie {
    * so a burst blends into one push rather than a twitch per bullet.
    */
   private react(dt: number): void {
-    const SPRING = 220, DAMP = 2 * Math.sqrt(SPRING), RECOVER = Math.exp(-5 * dt);
+    const SPRING = 420, DAMP = 2 * Math.sqrt(SPRING), RECOVER = Math.exp(-4 * dt);
     const sat = (x: number, max: number) => Math.sign(x) * max * (1 - Math.exp(-Math.abs(x) / max));
     for (const p of this.parts) {
       p.flinchTarget *= RECOVER;
-      p.flinchVel += (SPRING * (sat(p.flinchTarget, 0.8) - p.flinch) - DAMP * p.flinchVel) * dt;
+      p.flinchVel += (SPRING * (sat(p.flinchTarget, 1.1) - p.flinch) - DAMP * p.flinchVel) * dt;
       p.flinch += p.flinchVel * dt;
     }
     const s = this.sway;
     s.tx *= RECOVER; s.tz *= RECOVER;
-    s.vx += (SPRING * (sat(s.tx, 0.5) - s.x) - DAMP * s.vx) * dt;
-    s.vz += (SPRING * (sat(s.tz, 0.35) - s.z) - DAMP * s.vz) * dt;
+    s.vx += (SPRING * (sat(s.tx, 0.8) - s.x) - DAMP * s.vx) * dt;
+    s.vz += (SPRING * (sat(s.tz, 0.55) - s.z) - DAMP * s.vz) * dt;
     s.x += s.vx * dt; s.z += s.vz * dt;
-    this.pushV.multiplyScalar(Math.exp(-5 * dt));
+    this.pushV.multiplyScalar(Math.exp(-4 * dt));
     this.heat *= Math.exp(-2 * dt);
     // ≳5 hits/s counts as sustained fire; eased so the lean-in builds up instead of jumping per hit.
     const uf = Math.min(1, Math.max(0, (this.heat - 2.5) / 3));
@@ -520,7 +520,7 @@ export class Zombie {
         const left = (ix * fz - iz * fx) / (impulse || 1); // + = pushed toward its left (+X local)
         this.sway.tx += k * 0.6 * fwd;
         this.sway.tz -= k * 0.6 * left;
-        this.pushV.x += ix * 0.05 * flinch; this.pushV.z += iz * 0.05 * flinch;
+        this.pushV.x += ix * 0.06 * flinch; this.pushV.z += iz * 0.06 * flinch;
         this.heat += 1;
       }
       if (this.hp <= 0) this.kill(dt);
