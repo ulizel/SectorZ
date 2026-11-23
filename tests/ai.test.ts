@@ -124,6 +124,27 @@ describe('zombie AI', () => {
     expect(moved).toBeLessThan(1.5); // a walking zombie would have carried it ~6 m
   });
 
+  it('a car-height obstacle it can see over: walks around it instead of pushing into it', () => {
+    // Low (0.9 m) wide block between zombie and player: the player is visible over it.
+    const p2 = setup();
+    p2.p.world.createCollider(RAPIER.ColliderDesc.cuboid(2.2, 0.45, 0.9).setTranslation(0, 0.45, -3).setCollisionGroups(groups(Group.STATIC, ALL)));
+    const ai2 = new ZombieAI(p2.p, 40); // rebuild the grid with the block in it
+    const z = p2.m.spawn(0, -5.5, 0);
+    ai2.alertAll(p2.m.zombies);
+    const at: AttackResult[] = [];
+    for (let i = 0; i < 60 * 15; i++) { ai2.update(SIM_DT, p2.target, p2.m.zombies, at); p2.m.update(SIM_DT); p2.p.step(); }
+    expect(Math.hypot(z.x - p2.target.x, z.z - p2.target.z)).toBeLessThan(AI.attackRange + 0.3);
+  });
+
+  it('each bullet wound slows a zombie a little, down to a floor', () => {
+    const { m } = setup();
+    const z = m.spawn(0, -5, 0);
+    for (let i = 0; i < 3; i++) m.hit(z.parts[PART_INDEX.torso].collider, 1, 0, 0, 0, 0, 1.1, -5, SIM_DT);
+    expect(z.speedMul).toBeCloseTo(1 - 3 * z.slowPerHit);
+    for (let i = 0; i < 30; i++) m.hit(z.parts[PART_INDEX.torso].collider, 0.1, 0, 0, 0, 0, 1.1, -5, SIM_DT);
+    expect(z.speedMul).toBeCloseTo(z.minSpeedMul);
+  });
+
   it('performance: 30 chasing zombies stay inside the budget', () => {
     const { p, m, ai, target, run } = setup([[5, 0, 0.3, 4], [-5, 3, 3, 0.3]]);
     for (let i = 0; i < 30; i++) m.spawn(Math.cos(i * 0.7) * 14, Math.sin(i * 0.7) * 14, 0);

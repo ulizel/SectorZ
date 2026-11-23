@@ -27,7 +27,7 @@ export const groups = (member: number, filter: number) => ((member & 0xffff) << 
 /** Surface material: drives bullet penetration, impact effects and sounds. */
 export type Material = 'concrete' | 'wood' | 'metal' | 'flesh';
 /** Penetration power a bullet spends passing through each material (Infinity = always stops). */
-export const MATERIAL_COST: Record<Material, number> = { wood: 0.35, metal: 0.9, flesh: 0.3, concrete: Infinity };
+export const MATERIAL_COST: Record<Material, number> = { wood: 0.35, metal: 0.9, flesh: Infinity, concrete: Infinity } // bullets stop at the first zombie;
 
 export interface RayHit {
   collider: RAPIER.Collider;

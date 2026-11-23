@@ -28,6 +28,10 @@ interface Brain {
   attackT: number; struck: boolean;
   sightT: number; // next line-of-sight check
   canSee: boolean;
+  /** Straight line to the player is walkable (not just visible over a car bonnet). */
+  walkClear: boolean;
+  stuckT: number; // s of barely moving while trying to
+  detourT: number; detourX: number; detourZ: number;
   homeX: number; homeZ: number;
 }
 
@@ -65,7 +69,7 @@ export class ZombieAI {
     if (!z.brain) {
       z.brain = {
         mode: 'idle', alert: 0, wanderX: z.x, wanderZ: z.z, wanderT: 0, attackT: 0, struck: false,
-        sightT: Math.random() * 0.5, canSee: false, homeX: z.x, homeZ: z.z,
+        sightT: Math.random() * 0.5, canSee: false, walkClear: false, stuckT: 0, detourT: 0, detourX: 0, detourZ: 0, homeX: z.x, homeZ: z.z,
       } satisfies Brain;
     }
     return z.brain as Brain;
@@ -128,9 +132,13 @@ export class ZombieAI {
       b.canSee = t.alive && dist < AI.sightRange && !this.physics.raycast(z.x, 1.4, z.z, dx / (dist || 1), 0, dz / (dist || 1),
         Math.max(0.01, dist - 0.4), groups(Group.ZOMBIE, Group.STATIC));
       if (b.canSee) { b.alert = AI.loseInterestAfter; if (b.mode === 'idle') b.mode = 'chase'; }
+      b.walkClear = b.canSee && dist < 6 && this.lineWalkable(z.x, z.z, t.x, t.z);
     }
     b.alert -= dt;
     if (b.mode === 'chase' && (b.alert <= 0 || !t.alive)) b.mode = 'idle';
+
+    // The player can wade through: zombies get shoved aside instead of overlapping.
+    if (dist < 0.55 && dist > 1e-4) this.move(z, -dx / dist, -dz / dist, (0.55 - dist) * 0.4, dt);
 
     let speed = 0, dirX = 0, dirZ = 0;
     const crawler = z.crawler;
@@ -168,8 +176,9 @@ export class ZombieAI {
         z.speed = 0;
         return;
       }
-      speed = crawler ? AI.crawlSpeed : z.baseSpeed;
-      if (b.canSee && dist < 6) { dirX = dx / dist; dirZ = dz / dist; } // close and visible: straight at you
+      speed = (crawler ? AI.crawlSpeed : z.baseSpeed) * z.speedMul;
+      if (b.detourT > 0) { b.detourT -= dt; dirX = b.detourX; dirZ = b.detourZ; } // side-stepping an obstacle
+      else if (b.walkClear) { dirX = dx / dist; dirZ = dz / dist; } // clear ground between us: straight at you
       else if (this.nav.flow(z.x, z.z, tmp)) { dirX = tmp.x; dirZ = tmp.z; }
       else { dirX = dx / (dist || 1); dirZ = dz / (dist || 1); }
     } else {
@@ -199,8 +208,18 @@ export class ZombieAI {
     // Turn toward the travel direction, and walk where we face (no moonwalking).
     if (dl > 1e-4) this.turnToward(z, Math.atan2(dirX, dirZ), dt);
     const facing = Math.max(0, Math.cos(angleDelta(z.yaw, Math.atan2(dirX, dirZ))));
-    const actual = this.move(z, dirX, dirZ, speed * dt * (0.35 + 0.65 * facing), dt);
+    const want = speed * dt * (0.35 + 0.65 * facing);
+    const actual = this.move(z, dirX, dirZ, want, dt);
     z.speed = actual / dt;
+    // Stuck (barely moving for 3 s while chasing): side-step around the obstacle for a moment.
+    if (b.mode === 'chase' && want > 1e-4) {
+      b.stuckT = actual < want * 0.3 ? b.stuckT + dt : Math.max(0, b.stuckT - dt);
+      if (b.stuckT > 3) {
+        b.stuckT = 0;
+        const side = this.nav.isBlocked(z.x - dirZ * 1.5, z.z + dirX * 1.5) ? -1 : Math.random() < 0.5 ? 1 : -1;
+        b.detourX = -dirZ * side; b.detourZ = dirX * side; b.detourT = 1.2;
+      }
+    }
   }
 
   /** Sum of push-away vectors from neighbours inside personal space. */
@@ -223,6 +242,13 @@ export class ZombieAI {
       }
     }
     out.x = sx; out.z = sz;
+  }
+
+  /** Is the straight line walkable on the nav grid? (sampled every 0.4 m) */
+  private lineWalkable(x0: number, z0: number, x1: number, z1: number): boolean {
+    const d = Math.hypot(x1 - x0, z1 - z0), n = Math.ceil(d / 0.4);
+    for (let i = 1; i < n; i++) if (this.nav.isBlocked(x0 + (x1 - x0) * i / n, z0 + (z1 - z0) * i / n)) return false;
+    return true;
   }
 
   private turnToward(z: Zombie, yaw: number, dt: number): void {

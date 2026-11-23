@@ -25,14 +25,10 @@ export const CAMERA = {
 
 /** Touch aim. Turn speeds/accuracy live per weapon (aimTurn, settle, recoilBloom in weapons/weapon.ts). */
 export const AIM = {
-  /** A lift-shot waits this long (s) for the aim to reach the thumb direction before firing anyway. */
-  pendingShotMax: 0.25,
-  /** "Arrived" tolerance for a pending lift-shot, radians (~2.3°). */
-  arriveTolerance: 0.04,
   /** Aim ease-in (s): a new drag ramps the turn speed up over this long. */
   easeIn: 0.3,
-  /** Automatic weapons only fire when the aim is within this of the thumb direction (rad, ~10°). */
-  fireAlign: 0.17,
+  /** Turn-speed multiplier while holding fire (slower, controlled sweeps). */
+  firingTurnMul: 0.35,
 };
 
 export const ARENA = { size: 44, wallHeight: 1.6 };

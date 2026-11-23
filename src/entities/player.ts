@@ -20,6 +20,8 @@ export class Player {
   yaw = 0; prevYaw = 0;
   health = PLAYER.maxHealth;
   walkPhase = 0;
+  /** Movement speed multiplier set by the game each tick (crowds slow you; pinning sets 0). */
+  slowMul = 1;
   readonly weapons = [new WeaponState(WEAPONS.pistol), new WeaponState(WEAPONS.smg)];
   weaponIndex = 0;
   get weapon(): WeaponState { return this.weapons[this.weaponIndex]; }
@@ -61,7 +63,7 @@ export class Player {
     if (!this.alive) { cmd.moveX = cmd.moveZ = cmd.aimX = cmd.aimZ = 0; cmd.trigger = cmd.triggerTap = false; }
 
     // Accelerate toward the target velocity (snappy but not instant).
-    const tx = cmd.moveX * PLAYER.moveSpeed, tz = cmd.moveZ * PLAYER.moveSpeed;
+    const tx = cmd.moveX * PLAYER.moveSpeed * this.slowMul, tz = cmd.moveZ * PLAYER.moveSpeed * this.slowMul;
     const hasInput = cmd.moveX !== 0 || cmd.moveZ !== 0;
     const rate = hasInput ? PLAYER.accel : PLAYER.decel;
     const dvx = tx - this.vx, dvz = tz - this.vz;
@@ -71,7 +73,7 @@ export class Player {
 
     // Collide-and-slide against the world via Rapier's character controller.
     this.controller.computeColliderMovement(this.collider, { x: this.vx * dt, y: 0, z: this.vz * dt },
-      undefined, groups(Group.PLAYER, ALL & ~Group.DEBRIS & ~Group.PLAYER & ~Group.RAGDOLL)); // corpses/limbs don't block
+      undefined, groups(Group.PLAYER, ALL & ~Group.DEBRIS & ~Group.PLAYER & ~Group.RAGDOLL & ~Group.ZOMBIE)); // corpses/limbs/zombies don't block (crowds slow instead)
     const m = this.controller.computedMovement();
     const t = this.body.translation();
     this.body.setNextKinematicTranslation({ x: t.x + m.x, y: t.y, z: t.z + m.z });

@@ -102,41 +102,6 @@ export class ParticleSystem {
   }
 }
 
-/** Short-lived bright bullet streaks. */
-export class Tracers {
-  private readonly pool: { mesh: THREE.Mesh; life: number }[] = [];
-  private readonly mat = new THREE.MeshBasicMaterial({ color: 0xffe9a8, transparent: true, toneMapped: false, depthWrite: false, blending: THREE.AdditiveBlending });
-
-  constructor(scene: THREE.Scene, count = 12) {
-    for (let i = 0; i < count; i++) {
-      const mesh = new THREE.Mesh(UNIT_BOX, this.mat.clone());
-      mesh.visible = false;
-      mesh.frustumCulled = false;
-      scene.add(mesh);
-      this.pool.push({ mesh, life: 0 });
-    }
-  }
-
-  spawn(a: THREE.Vector3, b: THREE.Vector3): void {
-    const t = this.pool.reduce((m, p) => (p.life < m.life ? p : m));
-    const len = a.distanceTo(b);
-    t.mesh.position.copy(a).add(b).multiplyScalar(0.5);
-    t.mesh.lookAt(b);
-    t.mesh.scale.set(0.035, 0.035, len);
-    t.mesh.visible = true;
-    t.life = 0.07;
-  }
-
-  update(dt: number): void {
-    for (const t of this.pool) {
-      if (t.life <= 0) continue;
-      t.life -= dt;
-      (t.mesh.material as THREE.MeshBasicMaterial).opacity = Math.max(0, t.life / 0.07);
-      if (t.life <= 0) t.mesh.visible = false;
-    }
-  }
-}
-
 /** A single reusable point light + voxel flash at the muzzle (always in scene: no shader recompiles). */
 export class MuzzleFlash {
   readonly light = new THREE.PointLight(0xffb45a, 0, 9, 1.6);

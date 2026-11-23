@@ -182,7 +182,7 @@ async function phone(browser, deviceName, landscape) {
   check('releasing the left stick stops movement', Math.hypot((await state(page)).z - s1.z) < 0.05);
   check('no shots from movement', s1.shots === 0);
 
-  // 2. Quick tap on the right half is ignored.
+  // 2. Quick tap on the right half fires one shot along the current aim.
   await touch('touchStart', [R]);
   await ticks(page, 2);
   await touch('touchEnd', []);
@@ -190,75 +190,66 @@ async function phone(browser, deviceName, landscape) {
   const s2 = await state(page);
   check('quick tap on right half fires one shot along the current aim', s2.shots - s1.shots === 1, `shots=${s2.shots - s1.shots}`);
 
-  // 3. Pistol lift-to-fire: dragging shows only the aim line; lifting fires one shot.
+  // 3. Dragging only aims: aim line, no shot while dragging or on release.
+  await ticks(page, 15);
   await touch('touchStart', [R]);
-  await dragRight(70, 0); // PUSH mode (default): drag right → aim right
-  await ticks(page, 40);
+  await dragRight(70, 0); // drag right → aim right
+  await ticks(page, 50);
   const s3 = await state(page);
   check('dragging right stick shows aim line', s3.aimLineVisible === true);
-  check('pistol: no shot while dragging', s3.shots === s2.shots, `shots=${s3.shots - s2.shots}`);
-  check('aim settles on the pulled direction (+X)', Math.abs(s3.aimX - 1) < 0.01 && Math.abs(s3.aimZ) < 0.01, `aim=(${s3.aimX.toFixed(2)},${s3.aimZ.toFixed(2)})`);
+  check('dragging never fires', s3.shots === s2.shots, `shots=${s3.shots - s2.shots}`);
+  check('aim settles on the dragged direction (+X)', Math.abs(s3.aimX - 1) < 0.01 && Math.abs(s3.aimZ) < 0.01, `aim=(${s3.aimX.toFixed(2)},${s3.aimZ.toFixed(2)})`);
   await page.screenshot({ path: `${OUT}/${deviceName.replace(/\W+/g, '-')}${landscape ? '-landscape' : ''}-aiming.png` });
   await touch('touchEnd', []);
   await ticks(page, 6);
   const s4 = await state(page);
-  check('pistol: lifting the thumb fires exactly one shot', s4.shots - s3.shots === 1, `shots=${s4.shots - s3.shots}`);
+  check('releasing a drag does not fire', s4.shots === s3.shots, `shots=${s4.shots - s3.shots}`);
   check('aim line hidden after release', s4.aimLineVisible === false);
 
-  // 4. Shot cancel: drag out, back into the deadzone, release → nothing.
+  // 4. Pistol touch-and-hold (still) fires exactly one shot; tap again at the same spot fires again.
   await ticks(page, 15);
   await touch('touchStart', [R]);
-  await dragRight(0, 70); // drag down → aim down
-  await ticks(page, 10);
-  check('aim line visible (down)', (await state(page)).aimLineVisible);
-  for (let i = 4; i >= 0; i--) { await touch('touchMove', [{ ...R, y: R.y + i * 14 * 0.2 }]); await sleep(16); }
-  await ticks(page, 10);
-  const s5 = await state(page);
-  check('dragging back into deadzone hides aim line', s5.aimLineVisible === false);
+  await ticks(page, 30); // > 0.2 s hold
   await touch('touchEnd', []);
-  await ticks(page, 10);
-  check('cancelled shot does not fire', (await state(page)).shots === s4.shots);
+  await ticks(page, 15);
+  const s5 = await state(page);
+  check('pistol: touch-and-hold fires once', s5.shots - s4.shots === 1, `shots=${s5.shots - s4.shots}`);
+  check('aim unchanged by tapping/holding (same spot)', Math.abs(s5.aimX - 1) < 0.01);
 
-  // 5. Multi-touch: move and aim at the same time, lift to fire while moving.
+  // 5. Multi-touch: moving with the left thumb while tapping to fire.
   const m0 = await state(page);
   await touch('touchStart', [L]);
   for (let i = 1; i <= 5; i++) { await touch('touchMove', [{ ...L, y: L.y - i * 14 }]); await sleep(16); }
+  await ticks(page, 20);
   await touch('touchStart', [LU, R]);
-  await dragRight(-70, 0, LU); // drag left → aim left
-  await ticks(page, 30);
-  const m1 = await state(page);
-  check('multi-touch: moving while aiming left', m0.z - m1.z > 1 && m1.aimX < -0.99, `dz=${(m0.z - m1.z).toFixed(2)} aimX=${m1.aimX.toFixed(2)}`);
-  await touch('touchEnd', [{ ...R, x: R.x - 70 }]); // CDP: touchEnd lists the finger(s) being lifted
-  await ticks(page, 6);
+  await ticks(page, 2);
+  await touch('touchEnd', [R]); // CDP: touchEnd lists the finger(s) being lifted
+  await ticks(page, 20);
   const m2 = await state(page);
-  check('multi-touch: lifting right thumb fires while still moving', m2.shots - m1.shots === 1, `shots=${m2.shots - m1.shots}`);
+  check('multi-touch: tap-fire while moving', m2.shots - m0.shots === 1 && m0.z - m2.z > 1, `shots=${m2.shots - m0.shots} dz=${(m0.z - m2.z).toFixed(2)}`);
   await touch('touchEnd', []);
   await ticks(page, 6);
 
-  // 6. Automatic weapon: hold-to-fire, cancel stops firing.
+  // 6. Automatic weapon: touch-and-hold fires continuously; dragging while holding aims slowly.
   await page.tap('#switch-btn');
   await ticks(page, 3);
   check('⇄ button switches to SMG', (await state(page)).weapon === 'smg');
   const f0 = await state(page);
   await touch('touchStart', [R]);
-  await dragRight(0, -30); // inner ring: aim only
-  await ticks(page, 30);
-  const fa = await state(page);
-  check('SMG: light push aims without firing', fa.aimLineVisible && fa.shots === f0.shots, `shots=${fa.shots - f0.shots}`);
-  for (let i = 1; i <= 4; i++) { await touch('touchMove', [{ ...R, y: R.y - 30 - i * 10 }]); await sleep(16); }
   await ticks(page, 60);
   const f1 = await state(page);
-  check('SMG: fires continuously while aimed', f1.shots - f0.shots >= 9, `shots=${f1.shots - f0.shots}`);
+  check('SMG: touch-and-hold fires continuously', f1.shots - f0.shots >= 7, `shots=${f1.shots - f0.shots}`);
+  await dragRight(0, 70); // drag down while firing → aim swings toward +Z, slowly
+  await ticks(page, 12);
+  const fa = await state(page);
+  const swung = Math.atan2(fa.aimX, fa.aimZ);
+  check('SMG: aiming while firing is slowed (still swinging after 0.2 s)', Math.abs(swung) > 0.3, `angle from target=${Math.abs(swung).toFixed(2)} rad`);
   await page.screenshot({ path: `${OUT}/${deviceName.replace(/\W+/g, '-')}${landscape ? '-landscape' : ''}-smg.png` });
-  for (let i = 4; i >= 0; i--) { await touch('touchMove', [{ ...R, y: R.y - i * 14 * 0.2 }]); await sleep(16); }
+  await touch('touchEnd', []);
   await ticks(page, 6);
   const f2 = await state(page);
   await ticks(page, 30);
-  const f3 = await state(page);
-  check('SMG: back into deadzone stops firing', f3.shots === f2.shots && !f3.aimLineVisible, `extra=${f3.shots - f2.shots}`);
-  await touch('touchEnd', []);
-  await ticks(page, 10);
-  check('SMG: release after cancel fires nothing', (await state(page)).shots === f3.shots);
+  check('SMG: releasing stops firing', (await state(page)).shots === f2.shots);
 
   // 7. Reload button.
   await page.tap('#reload-btn');
@@ -306,7 +297,7 @@ async function ragdollLab(browser) {
   await ticks(page, 20);
   check('lab spawns 5 zombies', (await state(page)).zombiesAlive === 5);
   await page.evaluate(() => { window.__SECTORZ__.game.ai.enabled = false; }); // stationary targets for the shooting checks
-  // Two zombies in a line straight ahead: one pistol round should pass through the first into the second.
+  // Two zombies in a line straight ahead: a pistol round must stop at the first one.
   await page.evaluate(() => {
     const g = window.__SECTORZ__.game;
     g.zombies.clear();
@@ -321,7 +312,7 @@ async function ragdollLab(browser) {
   await ticks(page, 10);
   const b = await state(page);
   check('bullets hit zombie body parts', b.zombieHits > a.zombieHits, `hits=${b.zombieHits - a.zombieHits}`);
-  check('pistol round passes through one zombie into the next', b.zombieHits - a.zombieHits >= 2 && b.penetrations > a.penetrations, `hits=${b.zombieHits - a.zombieHits}`);
+  check('pistol bullet stops at the first zombie (no piercing)', b.zombieHits - a.zombieHits === 1, `hits=${b.zombieHits - a.zombieHits}`);
   for (let i = 0; i < 6; i++) { await page.mouse.down(); await ticks(page, 2); await page.mouse.up(); await ticks(page, 16); }
   await ticks(page, 30);
   const c = await state(page);

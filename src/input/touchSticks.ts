@@ -1,5 +1,5 @@
 import type { RawInput } from './commands';
-import { AimStickLogic, AIM_DEADZONE, FIRE_ZONE } from './aimStick';
+import { AimStickLogic, AIM_DEADZONE } from './aimStick';
 
 interface Stick {
   id: number;
@@ -42,13 +42,7 @@ export class TouchSticks {
     const ring = document.createElement('div');
     ring.className = 'stick-deadzone';
     ring.style.width = ring.style.height = `${AIM_DEADZONE * RADIUS * 2}px`;
-    if (kind === 'aim') {
-      base.appendChild(ring);
-      const fire = document.createElement('div');
-      fire.className = 'stick-firezone';
-      fire.style.width = fire.style.height = `${FIRE_ZONE * RADIUS * 2}px`;
-      base.appendChild(fire);
-    }
+    if (kind === 'aim') base.appendChild(ring);
     const knob = document.createElement('div');
     knob.className = 'stick-knob';
     base.appendChild(knob);
@@ -94,7 +88,6 @@ export class TouchSticks {
     if (stick === this.right) {
       this.aim.move(stick.x, stick.y);
       stick.base.classList.toggle('aiming', this.aim.aiming);
-      stick.base.classList.toggle('firing', this.aim.firing);
     }
   }
 
@@ -104,10 +97,7 @@ export class TouchSticks {
       s.id = -1;
       s.x = s.y = 0;
       s.base.classList.remove('on', 'aiming', 'firing');
-      if (s === this.right) {
-        if (cancelled) this.aim.move(0, 0); // OS-cancelled touch (e.g. notification) never fires
-        this.aim.end(performance.now() / 1000);
-      }
+      if (s === this.right) this.aim.end(cancelled ? -1e9 : performance.now() / 1000); // OS-cancelled touch never fires
     }
   }
 
@@ -120,14 +110,12 @@ export class TouchSticks {
       out.moveX = (l.x / ll) * m;
       out.moveY = (l.y / ll) * m;
     }
-    if (this.aim.consumeTap()) out.stickTap = true;
-    const release = this.aim.consumeRelease();
-    if (release) {
-      out.stickReleased = true;
-      out.aimStick = release;
-    } else if (this.aim.aiming) {
-      out.stickAiming = true;
-      out.stickFiring = this.aim.firing;
+    this.aim.update(performance.now() / 1000);
+    if (this.aim.consumeTap() || this.aim.consumeHoldStart()) out.stickTap = true;
+    out.stickActive = this.aim.active;
+    out.stickFiring = this.aim.firing;
+    this.right.base.classList.toggle('firing', this.aim.firing);
+    if (this.aim.aiming) {
       out.aimStick = { x: this.aim.dirX, y: this.aim.dirY };
       out.aimStickMag = this.aim.mag;
     }

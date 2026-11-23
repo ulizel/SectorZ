@@ -125,6 +125,13 @@ export class Zombie {
   attackPose = 0;
   /** Base walking speed (m/s) for this individual. */
   baseSpeed = 1.15 + Math.random() * 0.45;
+  /**
+   * Wound slowdown: each hit multiplies speed down by `slowPerHit`, never below `minSpeedMul`.
+   * Per-zombie so future types can ignore it (0), or even speed up when hurt (negative).
+   */
+  speedMul = 1;
+  slowPerHit = 0.07;
+  minSpeedMul = 0.55;
   /** Death already counted (kills, loot). */
   counted = false;
   /** Last transforms of each part (kept after physics removal so the renderer can sink it away). */
@@ -451,7 +458,7 @@ export class Zombie {
    * Apply a hit to part i. Returns which part was severed (or -1).
    * `ix,iy,iz` impulse (N·s); `px,py,pz` hit point; `wound` records a visible wound there.
    */
-  hit(i: number, damage: number, ix: number, iy: number, iz: number, px: number, py: number, pz: number, dt: number, wound = false): number {
+  hit(i: number, damage: number, ix: number, iy: number, iz: number, px: number, py: number, pz: number, dt: number, wound = false, limbMult = 1): number {
     const p = this.parts[i];
     if (this.frozen) this.unfreeze();
     const dmg = PART_DAMAGE[p.def.name];
@@ -464,13 +471,14 @@ export class Zombie {
     }
     if (this.alive) {
       this.hp -= damage * dmg.mult;
+      if (wound) this.speedMul = Math.min(1.5, Math.max(this.minSpeedMul, this.speedMul - this.slowPerHit));
       if (this.state === 'alive' || this.state === 'gettingUp') {
         p.flinch += Math.min(0.9, impulse * 0.05);
         this.stagger.x += ix * 0.008; this.stagger.z += iz * 0.008;
       }
       if (this.hp <= 0) this.kill(dt);
     }
-    p.hp -= damage;
+    p.hp -= damage * limbMult;
     let severed = -1;
     if (p.hp <= 0 || impulse > dmg.breakImpulse) {
       if (this.sever(i, dt)) severed = i;

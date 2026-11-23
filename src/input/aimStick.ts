@@ -1,40 +1,37 @@
 /**
  * Pure state machine for the right-hand (aim) stick. No DOM, so it is unit-tested directly.
  *
- *  - Quick tap (< TAP_MAX s, never left the deadzone) → one "tap shot" along the current aim.
- *  - Holding inside the deadzone, then lifting → nothing (cancel).
- *  - Drag past the deadzone → `aiming` (aim line visible, automatic weapons fire).
- *  - Drag back inside the deadzone → aiming cancelled (line hidden, firing stops).
- *  - Lift while aiming → one queued "release shot" along the last aimed direction
- *    (used by single-shot weapons). Lift while not aiming → nothing.
+ *  - Drag past the deadzone → aim only (aim line visible, nothing fires).
+ *  - Quick tap (< TAP_MAX s, never dragged) → one shot along the current aim.
+ *  - Touch and hold still for HOLD_TIME → fire (single shot for the pistol, continuous for
+ *    automatic weapons) until the thumb lifts; dragging while holding aims slowly.
  */
 export const AIM_DEADZONE = 0.3; // fraction of full stick deflection
 const DEADZONE_EXIT = 0.24; // small hysteresis so the line doesn't flicker at the edge
-/** Automatic weapons: push past this deflection to fire (inside it you only aim). */
-export const FIRE_ZONE = 0.92;
-const FIRE_ZONE_EXIT = 0.85;
-/** A touch shorter than this (s) that never left the deadzone counts as a tap-to-fire. */
+/** A touch shorter than this (s) that never left the deadzone is a tap-to-fire. */
 export const TAP_MAX = 0.25;
+/** Holding still this long (s) starts firing. */
+export const HOLD_TIME = 0.2;
 
 export class AimStickLogic {
   active = false;
+  /** Thumb is past the deadzone (aim target valid). */
   aiming = false;
-  /** Pushed into the outer fire zone (automatic weapons fire while true). */
+  /** Touch-and-hold fire is on. */
   firing = false;
   dirX = 0;
   dirY = 0;
   /** Deflection beyond the deadzone, 0..1 (light push = fine aim). */
   mag = 0;
-  private release: { x: number; y: number } | null = null;
   private startTime = 0;
   private everAimed = false;
   private tapQueued = false;
+  private holdQueued = false;
 
-  /** `now` in seconds (for tap detection). */
+  /** `now` in seconds. */
   start(now = 0): void {
     this.active = true;
-    this.aiming = false;
-    this.everAimed = false;
+    this.aiming = this.firing = this.everAimed = false;
     this.startTime = now;
   }
 
@@ -42,39 +39,32 @@ export class AimStickLogic {
   move(nx: number, ny: number): void {
     if (!this.active) return;
     const m = Math.hypot(nx, ny);
-    const threshold = this.aiming ? DEADZONE_EXIT : AIM_DEADZONE;
-    if (m >= threshold) {
+    if (m >= (this.aiming ? DEADZONE_EXIT : AIM_DEADZONE)) {
       this.aiming = true;
-      this.everAimed = true;
+      if (!this.firing) this.everAimed = true; // a drag before the hold kicks in = aim only
       this.dirX = nx / m;
       this.dirY = ny / m;
       this.mag = Math.min(1, (m - AIM_DEADZONE) / (1 - AIM_DEADZONE));
-      this.firing = m >= (this.firing ? FIRE_ZONE_EXIT : FIRE_ZONE);
     } else {
       this.aiming = false;
-      this.firing = false;
+    }
+  }
+
+  /** Call every tick while active: turns a still hold into firing. */
+  update(now: number): void {
+    if (this.active && !this.firing && !this.everAimed && now - this.startTime >= HOLD_TIME) {
+      this.firing = true;
+      this.holdQueued = true;
     }
   }
 
   end(now = 0): void {
-    if (this.active && this.aiming) this.release = { x: this.dirX, y: this.dirY };
-    else if (this.active && !this.everAimed && now - this.startTime < TAP_MAX) this.tapQueued = true;
-    this.active = false;
-    this.aiming = false;
-    this.firing = false;
+    if (this.active && !this.everAimed && !this.firing && now - this.startTime < TAP_MAX) this.tapQueued = true;
+    this.active = this.aiming = this.firing = false;
   }
 
   /** True once after a quick tap. */
-  consumeTap(): boolean {
-    const t = this.tapQueued;
-    this.tapQueued = false;
-    return t;
-  }
-
-  /** Returns the release-shot direction once, then clears it. */
-  consumeRelease(): { x: number; y: number } | null {
-    const r = this.release;
-    this.release = null;
-    return r;
-  }
+  consumeTap(): boolean { const t = this.tapQueued; this.tapQueued = false; return t; }
+  /** True once when hold-fire starts (the single-shot weapons' shot). */
+  consumeHoldStart(): boolean { const t = this.holdQueued; this.holdQueued = false; return t; }
 }

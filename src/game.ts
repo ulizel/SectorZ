@@ -15,10 +15,12 @@ import { ZombieAI, AI as AI_CFG, type AttackResult } from './ai/zombieAI';
 import { ARENA } from './config';
 import { WaveDirector, type WaveEvent } from './systems/waves';
 import { Pickups, LOOT, type PickupKind } from './systems/pickups';
-import { Group, groups, ALL, PhysicsWorld, MATERIAL_COST } from './physics/physicsWorld';
+import { Group, groups, ALL, PhysicsWorld, MATERIAL_COST, type RayHit } from './physics/physicsWorld';
+import { BulletViews, type BulletVisual } from './render/bulletViews';
+import type { WeaponDef } from './weapons/weapon';
 import { Renderer } from './render/renderer';
 import { HumanoidRig, SURVIVOR_LOOK } from './render/humanoidRig';
-import { BulletHoles, MuzzleFlash, ParticleSystem, Tracers } from './render/effects';
+import { BulletHoles, MuzzleFlash, ParticleSystem } from './render/effects';
 import { buildArena, type DynamicProp } from './world/arena';
 import { Hud } from './ui/hud';
 import { DebugOverlay } from './ui/debugOverlay';
@@ -32,6 +34,9 @@ const BULLET_HEIGHT = 1.15;
 const AIM_LINE_LENGTH = 6;
 const v3 = new THREE.Vector3();
 const v3b = new THREE.Vector3();
+
+/** A bullet in flight (simulation). */
+interface Bullet extends BulletVisual { def: WeaponDef; power: number; skip: Set<number> }
 
 const BEST_KEY = 'sectorz.best';
 function loadBest(): { wave: number; kills: number } {
@@ -51,7 +56,6 @@ export class Game {
   private readonly propStart: THREE.Vector3[];
   private readonly sparks: ParticleSystem;
   private readonly debris: ParticleSystem;
-  private readonly tracers: Tracers;
   private readonly flash: MuzzleFlash;
   private readonly hud = new Hud();
   private readonly aimLine: THREE.Mesh;
@@ -72,14 +76,14 @@ export class Game {
   private stickHeld = 0; // s the aim stick has been dragging (ease-in)
   private stickTarget = 0; // where the thumb points (radians)
   private readonly aim = new AimModel();
-  /** Lift-to-fire shot waiting for the aim to arrive at the thumb direction. */
-  private pendingShot: { angle: number; t: number } | null = null;
+  private stickFiring = false;
   private recoil = 0;
   private visYaw = 0;
   private time = 0;
   private readonly weaponEvents: WeaponEvent[] = [];
   readonly stats = { shots: 0, hits: 0, ticks: 0, maxImpactSpeed: 0, penetrations: 0, activeReloads: 0, zombieHits: 0, kills: 0, dismembers: 0, damageTaken: 0, wave: 0 };
-  private readonly penSkip = new Set<number>();
+  private readonly bullets: Bullet[] = [];
+  private readonly bulletViews: BulletViews;
   private readonly holes: BulletHoles;
   private readonly blood: BulletHoles;
   private readonly impacts: import('./entities/zombieManager').ImpactResult[] = [];
@@ -123,9 +127,9 @@ export class Game {
 
     this.sparks = new ParticleSystem(quality.maxSparks, { emissive: true });
     this.debris = new ParticleSystem(quality.maxSparks * 2 + quality.maxCasings, { shadows: false });
-    this.tracers = new Tracers(scene);
     this.flash = new MuzzleFlash(scene);
     this.holes = new BulletHoles(scene);
+    this.bulletViews = new BulletViews(scene);
     this.blood = new BulletHoles(scene, quality.name === 'mobile' ? 40 : 80, 0x5c070a, 0.32, 30, 0.8);
     scene.add(this.sparks.mesh, this.debris.mesh);
 
@@ -184,17 +188,17 @@ export class Game {
     out.aiming = out.trigger = out.triggerTap = false;
     const automatic = this.player.weapon.def.automatic;
     this.stickAim = !!raw.aimStick;
-    if (raw.aimStick) {
-      // Touch: "pull" mode (default) aims opposite the drag, like a slingshot.
-      const sgn = settings.aimReverse ? -1 : 1;
-      this.stickTarget = Math.atan2(raw.aimStick.x * sgn, raw.aimStick.y * sgn);
-      this.stickMag = raw.stickReleased ? 1 : raw.aimStickMag;
-      out.aiming = raw.stickAiming;
-      // SMG: inner area aims, outer ring fires — but only once the aim has caught up with the thumb
-      // (no spraying while the aim is still swinging round).
-      out.trigger = automatic && raw.stickFiring && this.aim.errorTo(this.stickTarget) < AIM.fireAlign;
-      // Single-shot: lifting queues a shot that fires once the aim arrives (or after a short wait).
-      if (!automatic && raw.stickReleased) this.pendingShot = { angle: this.stickTarget, t: AIM.pendingShotMax };
+    this.stickFiring = raw.stickFiring;
+    if (raw.stickActive) {
+      // Touch: dragging aims; a tap (or the start of a hold) fires once; holding keeps
+      // automatic weapons firing. The aim line shows while a thumb is down.
+      if (raw.aimStick) {
+        const sgn = settings.aimReverse ? -1 : 1;
+        this.stickTarget = Math.atan2(raw.aimStick.x * sgn, raw.aimStick.y * sgn);
+        this.stickMag = raw.aimStickMag;
+      }
+      out.aiming = true;
+      out.trigger = automatic && raw.stickFiring;
     } else if (raw.aimScreen && this.renderer.screenToGround(raw.aimScreen.x, raw.aimScreen.y, BULLET_HEIGHT, v3)) {
       const dx = v3.x - this.player.x, dz = v3.z - this.player.z;
       const d = Math.hypot(dx, dz);
@@ -204,8 +208,8 @@ export class Game {
       out.trigger = raw.mouseHeld;
       out.triggerTap = raw.mousePressed;
     }
-    // Quick tap on the aim side: one shot along the current (remembered) aim line.
-    if (raw.stickTap) { out.triggerTap = true; out.aimX = out.aimZ = 0; }
+    // Quick tap / hold start on the aim side: one shot along the current (remembered) aim line.
+    if (raw.stickTap) out.triggerTap = true;
     out.reload = raw.reload;
     out.switchWeapon = raw.switchWeapon;
   }
@@ -214,19 +218,20 @@ export class Game {
     this.stats.ticks++;
     this.resolveCommand(this.input.sample(), this.cmd);
     const cmd = this.cmd;
-    if (cmd.switchWeapon !== null) { this.player.switchWeapon(cmd.switchWeapon); this.pendingShot = null; }
+    if (cmd.switchWeapon !== null) this.player.switchWeapon(cmd.switchWeapon);
     const def = this.player.weapon.def;
 
     // ── Aim with inertia (touch) or direct (mouse); remembered between drags.
-    const turning = this.stickAim || this.pendingShot !== null;
+    const turning = this.stickAim;
     if (turning) {
-      const target = this.pendingShot ? this.pendingShot.angle : this.stickTarget;
+      const target = this.stickTarget;
       // Ease-in: a fresh drag starts turning gently and reaches full speed over AIM.easeIn s,
       // so the first millimetres of thumb movement don't yank the aim off its last position.
       this.stickHeld = this.stickAim ? this.stickHeld + dt : 0;
       const k = Math.min(1, this.stickHeld / AIM.easeIn);
-      const ramp = this.pendingShot ? 1 : 0.12 + 0.88 * k * k * (3 - 2 * k);
-      this.aim.turnToward(target, this.pendingShot ? 1 : this.stickMag, def, dt * ramp);
+      // Aiming while holding fire is much slower: controlled sweeps, not wild spraying.
+      const ramp = (0.12 + 0.88 * k * k * (3 - 2 * k)) * (this.stickFiring ? AIM.firingTurnMul : 1);
+      this.aim.turnToward(target, this.stickMag, def, dt * ramp);
     } else if (cmd.aimX !== 0 || cmd.aimZ !== 0) {
       this.stickHeld = 0;
       this.aim.set(Math.atan2(cmd.aimX, cmd.aimZ), dt);
@@ -236,16 +241,13 @@ export class Game {
     }
     if (turning || cmd.aimX !== 0 || cmd.aimZ !== 0) { cmd.aimX = this.aim.x; cmd.aimZ = this.aim.z; }
     this.aimX = this.aim.x; this.aimZ = this.aim.z;
-    if (this.pendingShot) {
-      this.pendingShot.t -= dt;
-      cmd.aiming = true; // keep the line up while the shot is pending
-      if (this.aim.errorTo(this.pendingShot.angle) < AIM.arriveTolerance || this.pendingShot.t <= 0) {
-        cmd.triggerTap = true;
-        this.pendingShot = null;
-      }
-    }
     this.aiming = cmd.aiming;
 
+    // Zombies around the player slow them down (wading through a crowd) instead of blocking.
+    // Future special zombies can pin the player by forcing slowMul to 0.
+    let near = 0;
+    for (const z of this.zombies.zombies) if (z.state === 'alive' && Math.hypot(z.x - this.player.x, z.z - this.player.z) < 1.1) near++;
+    this.player.slowMul = Math.max(0.35, 1 - 0.22 * near);
     this.player.update(cmd, dt);
     // Zombie AI: chase, attack. Hits land on the player.
     const p0 = this.player;
@@ -271,6 +273,7 @@ export class Game {
       else if (e === 'activeReload') { this.stats.activeReloads++; this.events.emit('activeReload', { weapon: w, success: true }); }
       else if (e === 'reloadFumble') this.events.emit('activeReload', { weapon: w, success: false });
     }
+    this.stepBullets(dt);
     this.physics.step();
     // Environmental impacts: bodies slammed into the world take damage; thuds for sound.
     this.zombies.processImpacts(this.physics.contactForces, dt, this.impacts);
@@ -287,63 +290,86 @@ export class Game {
     }
   }
 
+  /** Spawn bullets (they fly and hit in stepBullets). */
   private fire(): void {
     const p = this.player, def = p.weapon.def;
     const spread = this.aim.spread(def); // accuracy depends on stance, turning, recoil, steadiness
-    const filter = groups(Group.PLAYER, ALL & ~Group.PLAYER & ~Group.DEBRIS);
     for (let i = 0; i < def.pellets; i++) {
       // Gaussian-ish spread (sum of two uniforms): most shots near the centre, few at the edge.
       const a = this.aim.angle + ((Math.random() + Math.random()) - 1) * spread;
-      const dx = Math.sin(a), dz = Math.cos(a);
+      // Subtle vertical scatter, biased low (some shots catch legs instead of always the chest).
+      const pitch = -Math.random() * def.vSpread + Math.random() * def.vSpread * 0.25;
+      const c = Math.cos(pitch);
+      const dx = Math.sin(a) * c, dy = Math.sin(pitch), dz = Math.cos(a) * c;
       this.stats.shots++;
-      // Penetration: the bullet keeps going through soft materials while it has power left.
-      let power = def.penetration;
-      let ox = p.x, oz = p.z, travelled = 0;
-      let ex = p.x + dx * def.range, ez = p.z + dz * def.range, ey = BULLET_HEIGHT;
-      this.penSkip.clear();
-      for (let seg = 0; seg < 4; seg++) {
-        const hit = this.physics.raycast(ox, BULLET_HEIGHT, oz, dx, 0, dz, def.range - travelled, filter, p.collider, this.penSkip);
-        if (!hit) { ex = ox + dx * (def.range - travelled); ez = oz + dz * (def.range - travelled); break; }
-        ex = hit.point.x; ey = hit.point.y; ez = hit.point.z;
-        const material = this.physics.materialOf(hit.collider);
-        const cost = MATERIAL_COST[material];
-        const penetrated = power >= cost;
-        const body = hit.collider.parent();
-        // Force scales with the bullet's remaining power (a bullet that punches through transfers less).
-        const force = def.impulse * (penetrated ? 0.55 : 1) * Math.min(1, power / def.penetration + 0.3);
-        const zr = material === 'flesh'
-          ? this.zombies.hit(hit.collider, def.damage * Math.min(1, power / def.penetration + 0.3),
-            dx * force, force * 0.25, dz * force, ex, ey, ez, SIM_DT)
-          : null;
-        const dynamic = !!zr || (!!body && body.isDynamic());
-        if (zr) {
-          this.stats.zombieHits++;
-          if (zr.severed >= 0) {
-            const sp = zr.zombie.parts[zr.severed].body.translation();
-            this.stats.dismembers++;
-            this.events.emit('dismember', { x: sp.x, y: sp.y, z: sp.z, dx, dz });
-          }
-          if (zr.killed) this.events.emit('zombieKilled', { x: ex, y: ey, z: ez });
-        } else if (dynamic) {
-          this.stats.hits++;
-          body!.applyImpulseAtPoint({ x: dx * force, y: force * 0.15, z: dz * force }, hit.point, true);
-          const v = body!.linvel();
-          this.stats.maxImpactSpeed = Math.max(this.stats.maxImpactSpeed, Math.hypot(v.x, v.y, v.z));
-        }
-        this.events.emit('hit', { x: ex, y: ey, z: ez, nx: hit.normal.x, ny: hit.normal.y, nz: hit.normal.z, dynamic, material, penetrated });
-        if (!penetrated) break;
-        this.stats.penetrations++;
-        power -= cost;
-        this.penSkip.add(hit.collider.handle);
-        travelled += hit.toi;
-        ox = ex; oz = ez;
-      }
-      this.events.emit('shot', { x: ex, y: ey, z: ez, dx, dz, weapon: def.id });
+      this.bullets.push({
+        x: p.x, y: BULLET_HEIGHT, z: p.z, px: p.x, py: BULLET_HEIGHT, pz: p.z, dx, dy, dz,
+        travelled: 0, heavy: !def.automatic, def, power: def.penetration, skip: new Set<number>(),
+      });
+      this.events.emit('shot', { x: p.x + dx * 6, y: BULLET_HEIGHT, z: p.z + dz * 6, dx, dz, weapon: def.id });
       // Recoil shoves the shooter back a little (decays through the movement controller).
       p.vx -= dx * def.pushback; p.vz -= dz * def.pushback;
     }
     this.aim.onShot(def, p.weapon.burst);
     this.ai.noise(p.x, p.z, AI_CFG.hearShotRange, this.zombies.zombies); // gunshots draw the horde
+  }
+
+  /**
+   * Move bullets one tick. Each tick the whole path segment is ray-cast (excluding the shooter),
+   * so a bullet can never skip past a thin object or a limb, however fast it is.
+   */
+  private stepBullets(dt: number): void {
+    const filter = groups(Group.PLAYER, ALL & ~Group.PLAYER & ~Group.DEBRIS);
+    for (let i = this.bullets.length - 1; i >= 0; i--) {
+      const b = this.bullets[i], def = b.def;
+      b.px = b.x; b.py = b.y; b.pz = b.z;
+      let step = Math.min(def.bulletSpeed * dt, def.range - b.travelled);
+      let alive = step > 0;
+      while (alive && step > 1e-4) {
+        const hit = this.physics.raycast(b.x, b.y, b.z, b.dx, b.dy, b.dz, step, filter, this.player.collider, b.skip);
+        if (!hit) { b.x += b.dx * step; b.y += b.dy * step; b.z += b.dz * step; b.travelled += step; break; }
+        b.x = hit.point.x; b.y = hit.point.y; b.z = hit.point.z;
+        b.travelled += hit.toi; step -= hit.toi;
+        alive = this.bulletImpact(b, hit);
+      }
+      if (!alive || b.travelled >= def.range - 1e-3) this.bullets.splice(i, 1);
+    }
+  }
+
+  /** Resolve one bullet impact. Returns true if the bullet carries on (penetrated). */
+  private bulletImpact(b: Bullet, hit: RayHit): boolean {
+    const def = b.def, ex = hit.point.x, ey = hit.point.y, ez = hit.point.z;
+    const material = this.physics.materialOf(hit.collider);
+    const cost = MATERIAL_COST[material];
+    const penetrated = b.power >= cost;
+    const body = hit.collider.parent();
+    // Force scales with the bullet's remaining power (a bullet that punches through transfers less).
+    const power = Math.min(1, b.power / def.penetration + 0.3);
+    const force = def.impulse * (penetrated ? 0.55 : 1) * power;
+    const zr = material === 'flesh'
+      ? this.zombies.hit(hit.collider, def.damage * power, b.dx * force, force * 0.25, b.dz * force, ex, ey, ez, SIM_DT, def.limbMult)
+      : null;
+    const dynamic = !!zr || (!!body && body.isDynamic());
+    if (zr) {
+      this.stats.zombieHits++;
+      if (zr.severed >= 0) {
+        const sp = zr.zombie.parts[zr.severed].body.translation();
+        this.stats.dismembers++;
+        this.events.emit('dismember', { x: sp.x, y: sp.y, z: sp.z, dx: b.dx, dz: b.dz });
+      }
+      if (zr.killed) this.events.emit('zombieKilled', { x: ex, y: ey, z: ez });
+    } else if (dynamic) {
+      this.stats.hits++;
+      body!.applyImpulseAtPoint({ x: b.dx * force, y: force * 0.15, z: b.dz * force }, hit.point, true);
+      const v = body!.linvel();
+      this.stats.maxImpactSpeed = Math.max(this.stats.maxImpactSpeed, Math.hypot(v.x, v.y, v.z));
+    }
+    this.events.emit('hit', { x: ex, y: ey, z: ez, nx: hit.normal.x, ny: hit.normal.y, nz: hit.normal.z, dynamic, material, penetrated });
+    if (!penetrated) return false;
+    this.stats.penetrations++;
+    b.power -= cost;
+    b.skip.add(hit.collider.handle);
+    return true;
   }
 
   // ───────────────────────────── presentation ─────────────────────────────
@@ -395,8 +421,6 @@ export class Game {
       // SMG: every 3rd round blooms a bigger flash so sustained fire flickers like a real muzzle.
       const big = def.automatic && this.stats.shots % 3 === 0;
       this.flash.fire(v3, this.visYaw, def.automatic ? (big ? 1.6 : 0.8) : 1);
-      // Tracers: every pistol round, every 3rd SMG round (like real tracer ammo loading).
-      if (!def.automatic || big) this.tracers.spawn(v3, v3b.set(e.x, e.y, e.z));
       this.recoil = Math.min(1, this.recoil + def.recoil);
       this.renderer.addShake(def.shake);
       if (def.id === 'smg') this.sfx.smgShot(); else this.sfx.gunshot();
@@ -415,6 +439,8 @@ export class Game {
     });
     ev.on('hit', (e) => {
       const m = e.material;
+      // Brief bright flash where the bullet lands (cosmetic only).
+      this.sparks.emit(e.x, e.y, e.z, 0, 0, 0, 0.16, 0.06, m === 'flesh' ? 0xff6a50 : 0xfff0b0, 0, 0, 0, 0);
       // Sparks: lots on metal, a few on concrete, none on wood (splinters instead).
       const sparks = m === 'metal' ? 12 : m === 'concrete' ? 5 : 0;
       for (let i = 0; i < sparks; i++) {
@@ -536,7 +562,7 @@ export class Game {
     }
 
     this.flash.update(frameDt);
-    this.tracers.update(frameDt);
+    this.bulletViews.update(this.bullets, alpha);
     this.holes.update(frameDt);
     this.blood.update(frameDt);
     if (this.hitMarkerT > 0) { this.hitMarkerT -= frameDt; if (this.hitMarkerT <= 0) this.hitMarker.classList.remove('on'); }

@@ -1,78 +1,56 @@
 import { describe, it, expect } from 'vitest';
-import { AimStickLogic, AIM_DEADZONE, FIRE_ZONE } from '../src/input/aimStick';
+import { AimStickLogic, AIM_DEADZONE, HOLD_TIME, TAP_MAX } from '../src/input/aimStick';
 
-describe('AimStickLogic', () => {
-  it('a quick tap without dragging queues one tap-shot', () => {
+describe('AimStickLogic (drag = aim, tap = shot, hold = fire)', () => {
+  it('a quick tap fires one shot', () => {
     const a = new AimStickLogic();
     a.start(10);
     a.move(0.05, 0.02);
-    expect(a.aiming).toBe(false);
+    a.update(10.05);
     a.end(10.1);
-    expect(a.consumeRelease()).toBeNull();
     expect(a.consumeTap()).toBe(true);
-    expect(a.consumeTap()).toBe(false); // once
+    expect(a.consumeTap()).toBe(false);
+    expect(a.consumeHoldStart()).toBe(false);
   });
 
-  it('holding inside the deadzone then lifting does nothing (not a tap)', () => {
+  it('dragging aims in that exact direction and never fires', () => {
     const a = new AimStickLogic();
     a.start(10);
-    a.end(10.6);
-    expect(a.consumeTap()).toBe(false);
-    expect(a.consumeRelease()).toBeNull();
-  });
-
-  it('a short flick that left the deadzone is a release shot, not a tap', () => {
-    const a = new AimStickLogic();
-    a.start(10);
-    a.move(0.8, 0);
-    a.move(0.1, 0); // back in: cancelled
-    a.end(10.1);
-    expect(a.consumeTap()).toBe(false);
-    expect(a.consumeRelease()).toBeNull();
-  });
-
-  it('dragging past the deadzone aims in that exact direction', () => {
-    const a = new AimStickLogic();
-    a.start();
     a.move(0.6, -0.8);
     expect(a.aiming).toBe(true);
     expect(a.dirX).toBeCloseTo(0.6);
     expect(a.dirY).toBeCloseTo(-0.8);
+    a.update(11); // even held for a long time after dragging
+    expect(a.firing).toBe(false);
+    a.end(11.5);
+    expect(a.consumeTap()).toBe(false);
+    expect(a.consumeHoldStart()).toBe(false);
   });
 
-  it('lifting while aiming queues exactly one release shot along the last direction', () => {
+  it('touch and hold still → firing starts (one hold-start shot), continues until release', () => {
     const a = new AimStickLogic();
-    a.start();
-    a.move(1, 0);
-    a.move(0, 1);
-    a.end();
-    const r = a.consumeRelease();
-    expect(r).not.toBeNull();
-    expect(r!.x).toBeCloseTo(0);
-    expect(r!.y).toBeCloseTo(1);
-    expect(a.consumeRelease()).toBeNull(); // consumed once
-  });
-
-  it('dragging back into the deadzone cancels aiming and the release shot', () => {
-    const a = new AimStickLogic();
-    a.start();
+    a.start(10);
+    a.update(10 + HOLD_TIME - 0.01);
+    expect(a.firing).toBe(false);
+    a.update(10 + HOLD_TIME + 0.01);
+    expect(a.firing).toBe(true);
+    expect(a.consumeHoldStart()).toBe(true);
+    expect(a.consumeHoldStart()).toBe(false);
+    // Dragging while holding aims (and keeps firing).
     a.move(0.9, 0);
+    expect(a.firing).toBe(true);
     expect(a.aiming).toBe(true);
-    a.move(0.1, 0);
-    expect(a.aiming).toBe(false);
-    a.end();
-    expect(a.consumeRelease()).toBeNull();
+    a.end(12);
+    expect(a.firing).toBe(false);
+    expect(a.consumeTap()).toBe(false); // releasing a hold is not a tap
   });
 
-  it('re-aiming after a cancel works within the same touch', () => {
+  it('a long touch released before the hold threshold is impossible; a slow tap is not a tap', () => {
+    expect(HOLD_TIME).toBeLessThan(TAP_MAX + 0.1);
     const a = new AimStickLogic();
-    a.start();
-    a.move(0.9, 0);
-    a.move(0, 0);
-    a.move(-0.9, 0);
-    expect(a.aiming).toBe(true);
-    a.end();
-    expect(a.consumeRelease()!.x).toBeCloseTo(-1);
+    a.start(10);
+    a.end(10 + TAP_MAX + 0.05); // never updated → no hold; too slow for a tap
+    expect(a.consumeTap()).toBe(false);
   });
 
   it('has hysteresis at the deadzone edge (no flicker)', () => {
@@ -82,22 +60,7 @@ describe('AimStickLogic', () => {
     expect(a.aiming).toBe(false);
     a.move(AIM_DEADZONE * 1.05, 0);
     expect(a.aiming).toBe(true);
-    a.move(AIM_DEADZONE * 0.9, 0); // slightly inside, still within hysteresis band
+    a.move(AIM_DEADZONE * 0.9, 0);
     expect(a.aiming).toBe(true);
-  });
-
-  it('automatic fire zone: inner ring only aims, outer ring fires, back in stops', () => {
-    const a = new AimStickLogic();
-    a.start();
-    a.move(0.5, 0);
-    expect(a.aiming).toBe(true);
-    expect(a.firing).toBe(false);
-    a.move(FIRE_ZONE + 0.05, 0);
-    expect(a.firing).toBe(true);
-    a.move(0.5, 0);
-    expect(a.firing).toBe(false);
-    expect(a.aiming).toBe(true);
-    a.end();
-    expect(a.firing).toBe(false);
   });
 });

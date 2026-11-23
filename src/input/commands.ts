@@ -31,17 +31,15 @@ export interface RawInput {
   /** Mouse button held / pressed this tick (edge). */
   mouseHeld: boolean;
   mousePressed: boolean;
-  /** Touch aim stick: direction (screen space) while aiming, or on the release tick. */
+  /** Touch aim stick direction (screen space) while dragged past the deadzone. */
   aimStick: { x: number; y: number } | null;
-  /** Touch aim stick is past the deadzone right now. */
-  stickAiming: boolean;
-  /** Touch aim stick pushed into the outer fire zone (automatic weapons). */
-  stickFiring: boolean;
   /** Touch aim stick deflection beyond the deadzone, 0..1. */
   aimStickMag: number;
-  /** Touch aim stick was lifted while aiming this tick (lift-to-fire). */
-  stickReleased: boolean;
-  /** Quick tap on the aim side: fire once along the current aim. */
+  /** A touch is down on the aim side (aim line visible). */
+  stickActive: boolean;
+  /** Touch-and-hold fire is on. */
+  stickFiring: boolean;
+  /** One-shot trigger this tick (quick tap, or the start of a hold). */
   stickTap: boolean;
   reload: boolean;
   switchWeapon: number | null;
@@ -49,5 +47,5 @@ export interface RawInput {
 
 export const emptyRaw = (): RawInput => ({
   moveX: 0, moveY: 0, aimScreen: null, mouseHeld: false, mousePressed: false,
-  aimStick: null, stickAiming: false, stickFiring: false, aimStickMag: 0, stickReleased: false, stickTap: false, reload: false, switchWeapon: null,
+  aimStick: null, aimStickMag: 0, stickActive: false, stickFiring: false, stickTap: false, reload: false, switchWeapon: null,
 });
