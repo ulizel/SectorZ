@@ -1,7 +1,7 @@
 import type * as THREE from 'three';
 
 export interface DebugStats {
-  physicsMs: number; bodies: number; colliders: number; particles: number; quality: string;
+  physicsMs: number; bodies: number; colliders: number; particles: number; quality: string; ragdolls: number; zombies: number;
 }
 
 /** Performance overlay: toggled with the FPS button, the ` key, or ?debug=1. */
@@ -44,6 +44,7 @@ export class DebugOverlay {
         `FPS ${this.fps.toFixed(0)}  worst ${(this.worst * 1000).toFixed(1)}ms\n` +
         `physics ${this.avgPhysicsMs.toFixed(2)}ms  bodies ${s.bodies}  colliders ${s.colliders}\n` +
         `draws ${info.render.calls}  tris ${info.render.triangles}  particles ${s.particles}\n` +
+        `zombies ${s.zombies}  ragdolls ${s.ragdolls}\n` +
         `quality ${s.quality}  dpr ${renderer.getPixelRatio().toFixed(2)}  ${innerWidth}x${innerHeight}`;
     }
     this.frames = 0; this.acc = 0; this.worst = 0; this.physAcc = 0; this.physN = 0;

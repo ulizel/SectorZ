@@ -45,6 +45,7 @@ function lockMobileBrowser(): void {
 
 const status = document.getElementById('status')!;
 const startBtn = document.getElementById('start') as HTMLButtonElement;
+const labBtn = document.getElementById('start-lab') as HTMLButtonElement;
 
 async function boot(): Promise<void> {
   const quality = pickQuality();
@@ -81,14 +82,22 @@ async function boot(): Promise<void> {
     ? 'Left thumb: move · Right thumb: drag to aim, release to shoot (SMG: hold) · ⇄ weapon'
     : 'WASD move · Mouse aim · Click fire · R reload · 1/2/Q switch weapon';
   startBtn.disabled = false;
+  labBtn.disabled = false;
   startBtn.textContent = quality.name === 'mobile' ? 'TAP TO PLAY' : 'CLICK TO PLAY';
-  const begin = () => {
+  let started = false;
+  const begin = (lab: boolean) => {
+    if (started) return;
+    started = true;
     document.getElementById('title')!.classList.add('hidden');
+    if (lab) enterLab(game);
     game.start();
     api.ready = true;
   };
-  startBtn.addEventListener('pointerup', begin, { once: true }); // pointer, not click: touch defaults are blocked
-  if (new URLSearchParams(location.search).has('autostart')) begin();
+  // pointer, not click: touch defaults are blocked
+  startBtn.addEventListener('pointerup', () => begin(false));
+  labBtn.addEventListener('pointerup', () => begin(true));
+  const q = new URLSearchParams(location.search);
+  if (q.has('autostart') || q.has('lab')) begin(q.has('lab'));
 }
 
 boot().catch((err) => {
@@ -96,3 +105,24 @@ boot().catch((err) => {
   api.errors.push(String(err));
   status.textContent = `Failed to start: ${err instanceof Error ? err.message : err}`;
 });
+
+/** Ragdoll Lab: spawn test zombies, blow them up, slow motion. Keys: Z spawn, B boom, T slow-mo, C clear. */
+function enterLab(game: Game): void {
+  game.lab = true;
+  document.body.classList.add('lab');
+  game.spawnZombies(5);
+  const actions: Record<string, (btn?: HTMLElement) => void> = {
+    spawn: () => game.spawnZombies(5),
+    boom: () => game.explodeAtAim(),
+    slow: (btn) => {
+      game.loop.timeScale = game.loop.timeScale === 1 ? 0.25 : 1;
+      (btn ?? document.querySelector('[data-lab="slow"]'))?.classList.toggle('on', game.loop.timeScale !== 1);
+    },
+    clear: () => game.zombies.clear(),
+  };
+  document.querySelectorAll<HTMLElement>('#lab-panel button').forEach((b) => {
+    b.addEventListener('pointerdown', (e) => { e.stopPropagation(); e.preventDefault(); actions[b.dataset.lab!](b); });
+  });
+  const keys: Record<string, string> = { KeyZ: 'spawn', KeyB: 'boom', KeyT: 'slow', KeyC: 'clear' };
+  addEventListener('keydown', (e) => { const a = keys[e.code]; if (a && !e.repeat) actions[a](); });
+}

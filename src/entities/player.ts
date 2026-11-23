@@ -68,7 +68,7 @@ export class Player {
 
     // Collide-and-slide against the world via Rapier's character controller.
     this.controller.computeColliderMovement(this.collider, { x: this.vx * dt, y: 0, z: this.vz * dt },
-      undefined, groups(Group.PLAYER, ALL & ~Group.DEBRIS & ~Group.PLAYER));
+      undefined, groups(Group.PLAYER, ALL & ~Group.DEBRIS & ~Group.PLAYER & ~Group.RAGDOLL)); // corpses/limbs don't block
     const m = this.controller.computedMovement();
     const t = this.body.translation();
     this.body.setNextKinematicTranslation({ x: t.x + m.x, y: t.y, z: t.z + m.z });

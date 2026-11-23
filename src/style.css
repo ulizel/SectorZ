@@ -86,3 +86,13 @@ body.touch #reload-btn, body.touch #switch-btn { display: block; }
   top: max(12px, env(safe-area-inset-top)); background: var(--panel); color: var(--ink);
   border: 1px solid rgba(255,255,255,0.25); font: 11px var(--font); padding: 6px 8px; }
 body.touch #aim-toggle { display: block; }
+
+#start-lab { margin-top: 14px; font: 700 14px var(--font); letter-spacing: 2px; color: var(--ink); background: transparent;
+  border: 2px solid rgba(255,255,255,0.45); padding: 10px 20px; cursor: pointer; touch-action: none; }
+#start-lab:disabled { opacity: 0.4; }
+#lab-panel { display: none; position: absolute; left: 50%; transform: translateX(-50%); top: calc(max(12px, env(safe-area-inset-top)) + 26px);
+  gap: 6px; pointer-events: auto; }
+body.lab #lab-panel { display: flex; }
+#lab-panel button { background: var(--panel); color: var(--ink); border: 1px solid rgba(255,255,255,0.3); font: 700 12px var(--font);
+  padding: 9px 10px; letter-spacing: 1px; touch-action: none; }
+#lab-panel button.on { background: var(--accent); }

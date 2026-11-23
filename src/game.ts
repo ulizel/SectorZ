@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { PLAYER, AIM } from './config';
+import { PLAYER, AIM, SIM_DT } from './config';
 import { EventBus } from './core/events';
 import { FixedLoop } from './core/loop';
 import { lerp, angleDelta } from './core/math';
@@ -8,6 +8,9 @@ import { Sfx } from './audio/sfx';
 import { emptyCommand, type InputCommand, type RawInput } from './input/commands';
 import { InputManager } from './input/inputManager';
 import { Player } from './entities/player';
+import { ZombieManager } from './entities/zombieManager';
+import type { Zombie } from './entities/zombie';
+import { ZombieView } from './render/zombieView';
 import { Group, groups, ALL, PhysicsWorld, MATERIAL_COST } from './physics/physicsWorld';
 import { Renderer } from './render/renderer';
 import { HumanoidRig, SURVIVOR_LOOK } from './render/humanoidRig';
@@ -64,14 +67,22 @@ export class Game {
   private visYaw = 0;
   private time = 0;
   private readonly weaponEvents: WeaponEvent[] = [];
-  readonly stats = { shots: 0, hits: 0, ticks: 0, maxImpactSpeed: 0, penetrations: 0, activeReloads: 0 };
+  readonly stats = { shots: 0, hits: 0, ticks: 0, maxImpactSpeed: 0, penetrations: 0, activeReloads: 0, zombieHits: 0, kills: 0, dismembers: 0 };
   private readonly penSkip = new Set<number>();
   private readonly holes: BulletHoles;
   private readonly hitMarker = document.getElementById('hitmarker')!;
   private hitMarkerT = 0;
   private readonly retMat: THREE.MeshBasicMaterial;
 
+  readonly zombies: ZombieManager;
+  private readonly zombieViews = new Map<Zombie, ZombieView>();
+  private readonly sinking: ZombieView[] = [];
+  lab = false;
+
   constructor(container: HTMLElement, touchLayer: HTMLElement, reloadBtn: HTMLElement, switchBtn: HTMLElement, readonly quality: QualityPreset) {
+    this.zombies = new ZombieManager(this.physics, quality.name === 'mobile'
+      ? { maxRagdolls: 6, maxLooseLimbs: 20, corpseLife: 25 }
+      : { maxRagdolls: 12, maxLooseLimbs: 40, corpseLife: 40 });
     this.renderer = new Renderer(container, quality);
     this.input = new InputManager(touchLayer, reloadBtn, switchBtn);
     const scene = this.renderer.scene;
@@ -82,7 +93,7 @@ export class Game {
     scene.add(this.rig.root);
 
     this.sparks = new ParticleSystem(quality.maxSparks, { emissive: true });
-    this.debris = new ParticleSystem(quality.maxSparks + quality.maxCasings, { shadows: false });
+    this.debris = new ParticleSystem(quality.maxSparks * 2 + quality.maxCasings, { shadows: false });
     this.tracers = new Tracers(scene);
     this.flash = new MuzzleFlash(scene);
     this.holes = new BulletHoles(scene);
@@ -196,6 +207,7 @@ export class Game {
     this.aiming = cmd.aiming;
 
     this.player.update(cmd, dt);
+    this.zombies.update(dt);
     this.aim.updateBloom(def, Math.min(1, this.player.speed / PLAYER.moveSpeed), dt);
     this.player.weapon.update(dt, cmd.trigger, cmd.triggerTap, cmd.reload, this.weaponEvents);
     for (const e of this.weaponEvents) {
@@ -232,10 +244,22 @@ export class Game {
         const cost = MATERIAL_COST[material];
         const penetrated = power >= cost;
         const body = hit.collider.parent();
-        const dynamic = !!body && body.isDynamic();
         // Force scales with the bullet's remaining power (a bullet that punches through transfers less).
         const force = def.impulse * (penetrated ? 0.55 : 1) * Math.min(1, power / def.penetration + 0.3);
-        if (dynamic) {
+        const zr = material === 'flesh'
+          ? this.zombies.hit(hit.collider, def.damage * Math.min(1, power / def.penetration + 0.3),
+            dx * force, force * 0.25, dz * force, ex, ey, ez, SIM_DT)
+          : null;
+        const dynamic = !!zr || (!!body && body.isDynamic());
+        if (zr) {
+          this.stats.zombieHits++;
+          if (zr.severed >= 0) {
+            const sp = zr.zombie.parts[zr.severed].body.translation();
+            this.stats.dismembers++;
+            this.events.emit('dismember', { x: sp.x, y: sp.y, z: sp.z, dx, dz });
+          }
+          if (zr.killed) { this.stats.kills++; this.events.emit('zombieKilled', { x: ex, y: ey, z: ez }); }
+        } else if (dynamic) {
           this.stats.hits++;
           body!.applyImpulseAtPoint({ x: dx * force, y: force * 0.15, z: dz * force }, hit.point, true);
           const v = body!.linvel();
@@ -332,6 +356,23 @@ export class Game {
           e.nx * 4 + (Math.random() - 0.5) * 5, e.ny * 4 + Math.random() * 3, e.nz * 4 + (Math.random() - 0.5) * 5,
           0.035, 0.18 + Math.random() * 0.15, m === 'metal' ? 0xffe08a : 0xffc060, 0.3, 18, 2);
       }
+      if (m === 'flesh') {
+        // Blood: a spray in the bullet's direction plus a fine mist; no bullet holes on bodies.
+        for (let i = 0; i < 10; i++) {
+          this.debris.emit(e.x, e.y, e.z, -e.nx * (1.5 + Math.random() * 2.5) + (Math.random() - 0.5) * 2, 0.5 + Math.random() * 2,
+            -e.nz * (1.5 + Math.random() * 2.5) + (Math.random() - 0.5) * 2, 0.03 + Math.random() * 0.05, 0.9 + Math.random() * 0.6,
+            Math.random() < 0.6 ? 0x8a0e12 : 0x5c070a, 0.05, 12, 1);
+        }
+        for (let i = 0; i < 3; i++) this.debris.emit(e.x, e.y, e.z, (Math.random() - 0.5) * 0.8, Math.random() * 0.5, (Math.random() - 0.5) * 0.8,
+          0.1 + Math.random() * 0.06, 0.35, 0xa01418, 0, 1, 4, 2);
+        this.sfx.impact(m);
+        this.hitMarker.classList.remove('on');
+        void this.hitMarker.offsetWidth;
+        this.hitMarker.classList.add('on');
+        this.hitMarkerT = 0.15;
+        this.renderer.addShake(0.06);
+        return;
+      }
       const color = m === 'wood' ? 0x9a6a38 : m === 'metal' ? 0x5d6168 : 0x9a968e;
       const chunks = m === 'wood' ? 9 : 5;
       for (let i = 0; i < chunks; i++) {
@@ -363,6 +404,35 @@ export class Game {
         0.09, 5, 0x2b2d31, 0.25, 14, 0.8, 6);
     });
     ev.on('reloadEnd', () => this.sfx.reloadEnd());
+    ev.on('dismember', (e) => {
+      // Big gore burst where the limb tore off.
+      for (let i = 0; i < 26; i++) {
+        this.debris.emit(e.x, e.y, e.z, e.dx * 2 + (Math.random() - 0.5) * 5, 1 + Math.random() * 4, e.dz * 2 + (Math.random() - 0.5) * 5,
+          0.04 + Math.random() * 0.08, 1.2 + Math.random() * 1.2, Math.random() < 0.6 ? 0x8a0e12 : 0x4a0608, 0.15, 14, 0.8);
+      }
+      this.sfx.dismember();
+      this.renderer.addShake(0.15);
+    });
+    ev.on('explosion', (e) => {
+      this.flash.fire(v3.set(e.x, e.y + 0.6, e.z), 0, 6);
+      this.renderer.addShake(0.9);
+      this.sfx.explosion();
+      for (let i = 0; i < 40; i++) {
+        const a = Math.random() * Math.PI * 2, s = 3 + Math.random() * 9;
+        this.sparks.emit(e.x, e.y + 0.2, e.z, Math.cos(a) * s, 2 + Math.random() * 7, Math.sin(a) * s, 0.06, 0.3 + Math.random() * 0.4, Math.random() < 0.5 ? 0xffb347 : 0xffe08a, 0.3, 14, 1);
+      }
+      for (let i = 0; i < 18; i++) {
+        const a = Math.random() * Math.PI * 2, s = 0.5 + Math.random() * 1.5;
+        this.debris.emit(e.x, e.y + 0.3, e.z, Math.cos(a) * s, 0.8 + Math.random() * 1.2, Math.sin(a) * s,
+          0.35 + Math.random() * 0.35, 1.2 + Math.random() * 0.8, Math.random() < 0.5 ? 0x3a3a3c : 0x58585a, 0, -0.8, 1.5, 1);
+      }
+      for (let i = 0; i < 14; i++) {
+        const a = Math.random() * Math.PI * 2, s = 2 + Math.random() * 5;
+        this.debris.emit(e.x, e.y + 0.1, e.z, Math.cos(a) * s, 3 + Math.random() * 5, Math.sin(a) * s,
+          0.06 + Math.random() * 0.1, 2, 0x6e6b66, 0.3, 14, 0.5);
+      }
+      this.holes.add(e.x, 0.005, e.z, 0, 1, 0); // scorch mark
+    });
     ev.on('activeReload', (e) => this.sfx.activeReload(e.success));
     ev.on('dryFire', () => this.sfx.dry());
   }
@@ -384,6 +454,8 @@ export class Game {
     this.marker.position.x = x; this.marker.position.z = z;
     this.updateAimLine(x, z);
 
+    this.syncZombieViews(frameDt);
+
     for (const prop of this.props) {
       const t = prop.body.translation(), r = prop.body.rotation();
       prop.mesh.position.set(t.x, t.y, t.z);
@@ -402,11 +474,73 @@ export class Game {
     this.hud.update(p.weapon, p.health, PLAYER.maxHealth);
     this.debug.update(frameDt, this.renderer.renderer, {
       physicsMs: this.physics.lastStepMs,
+      ragdolls: this.zombies.ragdollCount,
+      zombies: this.zombies.zombies.length,
       bodies: this.physics.bodyCount,
       colliders: this.physics.colliderCount,
       particles: this.sparks.active + this.debris.active,
       quality: this.quality.name,
     });
+  }
+
+  private syncZombieViews(dt: number): void {
+    const zm = this.zombies;
+    for (const z of zm.spawned) this.zombieViews.set(z, new ZombieView(this.renderer.scene, z));
+    zm.spawned.length = 0;
+    for (const z of zm.removed) {
+      const view = this.zombieViews.get(z);
+      if (view) { this.zombieViews.delete(z); this.sinking.push(view); }
+    }
+    zm.removed.length = 0;
+    for (const view of this.zombieViews.values()) view.update();
+    for (let i = this.sinking.length - 1; i >= 0; i--) if (this.sinking[i].sinkStep(dt)) this.sinking.splice(i, 1);
+    // Severed stumps spurt blood for a moment.
+    for (const b of zm.bleeders) {
+      if (Math.random() > 0.55) continue;
+      const t = b.body.translation(), r = b.body.rotation();
+      v3.copy(b.local).applyQuaternion(new THREE.Quaternion(r.x, r.y, r.z, r.w)).add(v3b.set(t.x, t.y, t.z));
+      const lv = b.body.linvel();
+      this.debris.emit(v3.x, v3.y, v3.z, lv.x * 0.5 + (Math.random() - 0.5) * 1.5, lv.y * 0.5 + Math.random() * 1.5,
+        lv.z * 0.5 + (Math.random() - 0.5) * 1.5, 0.04 + Math.random() * 0.04, 1.5, Math.random() < 0.5 ? 0x8a0e12 : 0x5c070a, 0.1, 12, 0.6);
+    }
+  }
+
+  /** Spawn a ring of test zombies in front of the player (Ragdoll Lab). */
+  spawnZombies(n = 5): void {
+    const p = this.player;
+    for (let i = 0; i < n; i++) {
+      const a = Math.atan2(this.aimX, this.aimZ) + (i - (n - 1) / 2) * 0.32;
+      const d = 5 + (i % 2) * 1.2;
+      this.zombies.spawn(p.x + Math.sin(a) * d, p.z + Math.cos(a) * d, a + Math.PI);
+    }
+  }
+
+  /** Explosion where the player is aiming (up to 6 m ahead, or at the first obstacle). */
+  explodeAtAim(): void {
+    const p = this.player;
+    const hit = this.physics.raycast(p.x, 0.6, p.z, this.aimX, 0, this.aimZ, 6,
+      groups(Group.PLAYER, Group.STATIC | Group.PROP), p.collider);
+    const d = hit ? Math.max(1.5, hit.toi - 0.3) : 6;
+    this.explode(p.x + this.aimX * d, 0.3, p.z + this.aimZ * d);
+  }
+
+  explode(x: number, y: number, z: number, radius = 5): void {
+    const dt = SIM_DT;
+    const before = this.zombies.ragdollCount;
+    const torn = this.zombies.explode(x, y, z, radius, 160, 45, dt);
+    this.stats.dismembers += torn;
+    this.stats.kills += Math.max(0, this.zombies.ragdollCount - before);
+    for (const prop of this.props) {
+      const t = prop.body.translation();
+      let dx = t.x - x, dz = t.z - z;
+      const d = Math.max(0.5, Math.hypot(dx, dz));
+      if (d > radius) continue;
+      const f = (1 - d / radius) * 220;
+      dx /= d; dz /= d;
+      prop.body.applyImpulse({ x: dx * f, y: f * 0.8, z: dz * f }, true);
+      prop.body.applyTorqueImpulse({ x: (Math.random() - 0.5) * f * 0.3, y: 0, z: (Math.random() - 0.5) * f * 0.3 }, true);
+    }
+    this.events.emit('explosion', { x, y, z, radius });
   }
 
   /** Snapshot for automated tests and the debug console. */
@@ -424,6 +558,8 @@ export class Game {
       shots: this.stats.shots, propHits: this.stats.hits, ticks: this.stats.ticks,
       maxPropMove, maxImpactSpeed: this.stats.maxImpactSpeed, penetrations: this.stats.penetrations,
       activeReloads: this.stats.activeReloads, steady: this.aim.steady,
+      zombiesAlive: this.zombies.aliveCount, ragdolls: this.zombies.ragdollCount, severed: this.zombies.severedCount,
+      zombieHits: this.stats.zombieHits, kills: this.stats.kills, dismembers: this.stats.dismembers,
       fps: this.debug.fps, physicsMs: this.debug.avgPhysicsMs,
       bodies: this.physics.bodyCount,
     };

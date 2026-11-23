@@ -9,6 +9,8 @@ export class FixedLoop {
   private last = -1;
   private raf = 0;
   running = false;
+  /** Slow motion: 1 = real time, 0.25 = quarter speed (sim still steps at a fixed dt). */
+  timeScale = 1;
 
   constructor(
     private readonly step: (dt: number) => void,
@@ -18,7 +20,7 @@ export class FixedLoop {
   /** Advance by a real-time delta. Returns the number of sim steps executed. Exposed for tests. */
   advance(realDt: number): number {
     // Clamp huge gaps (tab switch, debugger) so we don't spiral.
-    this.acc += Math.min(realDt, SIM_DT * MAX_STEPS_PER_FRAME);
+    this.acc += Math.min(realDt * this.timeScale, SIM_DT * MAX_STEPS_PER_FRAME);
     let steps = 0;
     while (this.acc >= SIM_DT && steps < MAX_STEPS_PER_FRAME) {
       this.step(SIM_DT);

@@ -3,7 +3,7 @@ export type GameEvents = {
   shot: { x: number; y: number; z: number; dx: number; dz: number; weapon: string };
   hit: {
     x: number; y: number; z: number; nx: number; ny: number; nz: number; dynamic: boolean;
-    material: 'concrete' | 'wood' | 'metal';
+    material: 'concrete' | 'wood' | 'metal' | 'flesh';
     /** Bullet passed through (exit wound on the far side). */
     penetrated: boolean;
   };
@@ -11,6 +11,9 @@ export type GameEvents = {
   reloadEnd: { weapon: string };
   dryFire: { weapon: string };
   activeReload: { weapon: string; success: boolean };
+  dismember: { x: number; y: number; z: number; dx: number; dz: number };
+  zombieKilled: { x: number; y: number; z: number };
+  explosion: { x: number; y: number; z: number; radius: number };
 };
 
 type Handler<T> = (e: T) => void;

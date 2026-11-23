@@ -74,11 +74,18 @@ export class Sfx {
     this.tone(95 + Math.random() * 15, 38, 0.11, 1.0);
   }
   /** Material-specific impact: concrete = dry crack, wood = dull thock, metal = ringing ping. */
-  impact(m: 'concrete' | 'wood' | 'metal'): void {
+  impact(m: 'concrete' | 'wood' | 'metal' | 'flesh'): void {
+    if (m === 'flesh') { this.burst(0.1, 500, 1.2, 0.45); this.tone(110, 60, 0.08, 0.35); return; }
     if (m === 'concrete') { this.burst(0.06, 2400, 1.5, 0.28, 'bandpass'); return; }
     if (m === 'wood') { this.burst(0.08, 700, 2, 0.35, 'bandpass'); this.tone(220, 120, 0.06, 0.15, 'triangle'); return; }
     this.burst(0.03, 5000, 3, 0.2, 'bandpass');
     this.tone(1800 + Math.random() * 600, 1500, 0.25, 0.12, 'sine');
+  }
+  dismember(): void { this.burst(0.18, 600, 1, 0.6); this.tone(80, 40, 0.2, 0.5); this.burst(0.25, 1800, 0.8, 0.25, 'lowpass', 0.05); }
+  explosion(): void {
+    this.burst(0.9, 600, 0.5, 1.2);
+    this.burst(0.3, 2500, 0.5, 0.6);
+    this.tone(70, 25, 0.8, 1.2);
   }
   /** Active reload: bright double click on success, dull clunk on a fumble. */
   activeReload(success: boolean): void {
