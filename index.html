@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="theme-color" content="#2a3442" />
+    <title>Sector Z</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="touch"></div>
+
+    <div id="hud">
+      <div id="health"><div id="health-fill"></div></div>
+      <div id="weapon">
+        <div id="weapon-name">PISTOL</div>
+        <div id="ammo">12</div>
+        <div id="reload"><div id="reload-bar"></div></div>
+      </div>
+      <button id="reload-btn" aria-label="Reload">R</button>
+      <button id="fps-toggle" aria-label="Toggle performance overlay">FPS</button>
+      <pre id="debug"></pre>
+    </div>
+
+    <div id="title">
+      <h1>SECTOR&nbsp;<span>Z</span></h1>
+      <p class="sub">prototype · player movement &amp; shooting</p>
+      <button id="start" disabled>LOADING…</button>
+      <p id="status">Loading…</p>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
