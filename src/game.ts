@@ -152,9 +152,8 @@ export class Game {
     this.wireEffects();
     this.renderer.snapCamera(this.player.x, this.player.z);
     this.loop = new FixedLoop((dt) => this.step(dt), (a, dt) => this.render(a, dt));
-    document.addEventListener('visibilitychange', () => {
-      if (document.hidden) this.loop.stop(); else this.loop.start();
-    });
+    // Hidden tab: stop the loop. Resuming is left to the pause menu (it opens on hide).
+    document.addEventListener('visibilitychange', () => { if (document.hidden) this.loop.stop(); });
   }
 
   start(): void {

@@ -335,7 +335,7 @@ export class Zombie {
       v2.set(qd.x / s, qd.y / s, qd.z / s).applyQuaternion(qa); // axis → world
       // Velocity constraint: the relative spin along the correction axis must be at least what
       // closes the error over a few steps. Only the deficit is added (no accumulation → no jitter).
-      const want = (ang / dt) * 0.5;
+      const want = (ang / dt) * 0.8;
       const ca = p.body.angvel(), pa = parent.body.angvel();
       const relAlong = (ca.x - (parent.dynamic ? pa.x : 0)) * v2.x + (ca.y - (parent.dynamic ? pa.y : 0)) * v2.y + (ca.z - (parent.dynamic ? pa.z : 0)) * v2.z;
       const deficit = want - relAlong;

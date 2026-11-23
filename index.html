@@ -21,6 +21,7 @@
       </div>
       <button id="reload-btn" aria-label="Reload">R</button>
       <button id="switch-btn" aria-label="Switch weapon">⇄</button>
+      <button id="pause-btn" aria-label="Pause">II</button>
       <button id="fps-toggle" aria-label="Toggle performance overlay">FPS</button>
       <button id="aim-toggle" aria-label="Toggle aim direction">AIM: PULL</button>
       <pre id="debug"></pre>
@@ -31,7 +32,8 @@
     </div>
 
     <div id="hurt"></div>
-    <div id="dead"><h2>YOU DIED</h2><p class="kills"></p><button id="restart">RESTART</button></div>
+    <div id="pause"><h2>PAUSED</h2><button data-pause="resume">RESUME</button><button data-pause="restart">RESTART</button><button data-pause="menu">MAIN MENU</button></div>
+    <div id="dead"><h2>YOU DIED</h2><p class="kills"></p><button id="restart">RESTART</button><button class="menu" data-menu>MAIN MENU</button></div>
 
     <div id="title">
       <h1>SECTOR&nbsp;<span>Z</span></h1>

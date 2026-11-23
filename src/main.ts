@@ -85,6 +85,7 @@ async function boot(): Promise<void> {
   labBtn.disabled = false;
   startBtn.textContent = quality.name === 'mobile' ? 'TAP TO PLAY' : 'CLICK TO PLAY';
   document.getElementById('restart')!.addEventListener('pointerup', () => game.restart());
+  setupPause(game);
   // ?nozombies: no survival spawns (used by the movement/shooting smoke tests).
   if (new URLSearchParams(location.search).has('nozombies')) game.survival = false;
   let started = false;
@@ -132,4 +133,28 @@ function enterLab(game: Game): void {
   });
   const keys: Record<string, string> = { KeyZ: 'spawn', KeyB: 'boom', KeyT: 'slow', KeyC: 'clear', KeyI: 'ai' };
   addEventListener('keydown', (e) => { const a = keys[e.code]; if (a && !e.repeat) actions[a](); });
+}
+
+/** Pause menu: Resume / Restart / Main Menu. Opens from the II button, Esc or P. */
+function setupPause(game: Game): void {
+  const menu = document.getElementById('pause')!;
+  let paused = false;
+  const goMenu = () => { location.href = location.pathname; }; // reload to the title screen
+  const set = (on: boolean) => {
+    if (on === paused || !api.ready) return;
+    paused = on;
+    menu.classList.toggle('on', on);
+    if (on) game.loop.stop(); else game.loop.start();
+  };
+  document.getElementById('pause-btn')!.addEventListener('pointerdown', (e) => { e.stopPropagation(); e.preventDefault(); set(!paused); });
+  menu.querySelectorAll<HTMLElement>('button').forEach((b) => b.addEventListener('pointerup', () => {
+    const a = b.dataset.pause;
+    if (a === 'resume') set(false);
+    if (a === 'restart') { game.restart(); set(false); }
+    if (a === 'menu') goMenu();
+  }));
+  document.querySelector('#dead [data-menu]')!.addEventListener('pointerup', goMenu);
+  addEventListener('keydown', (e) => { if (e.code === 'Escape' || e.code === 'KeyP') set(!paused); });
+  // Leaving the app/tab pauses too, so zombies don't eat you while you're away.
+  document.addEventListener('visibilitychange', () => { if (document.hidden) set(true); });
 }
