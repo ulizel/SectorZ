@@ -197,7 +197,7 @@ export class Game {
         this.stickTarget = Math.atan2(raw.aimStick.x * sgn, raw.aimStick.y * sgn);
         this.stickMag = raw.aimStickMag;
       }
-      out.aiming = true;
+      out.aiming = !!raw.aimStick || raw.stickFiring; // no aim line for a quick tap
       out.trigger = automatic && raw.stickFiring;
     } else if (raw.aimScreen && this.renderer.screenToGround(raw.aimScreen.x, raw.aimScreen.y, BULLET_HEIGHT, v3)) {
       const dx = v3.x - this.player.x, dz = v3.z - this.player.z;
@@ -303,7 +303,7 @@ export class Game {
       const dx = Math.sin(a) * c, dy = Math.sin(pitch), dz = Math.cos(a) * c;
       this.stats.shots++;
       this.bullets.push({
-        x: p.x, y: BULLET_HEIGHT, z: p.z, px: p.x, py: BULLET_HEIGHT, pz: p.z, dx, dy, dz,
+        x: p.x, y: BULLET_HEIGHT, z: p.z, px: p.x, py: BULLET_HEIGHT, pz: p.z, ox: p.x, oy: BULLET_HEIGHT, oz: p.z, dx, dy, dz,
         travelled: 0, heavy: !def.automatic, def, power: def.penetration, skip: new Set<number>(),
       });
       this.events.emit('shot', { x: p.x + dx * 6, y: BULLET_HEIGHT, z: p.z + dz * 6, dx, dz, weapon: def.id });
