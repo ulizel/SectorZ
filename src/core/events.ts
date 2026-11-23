@@ -6,6 +6,8 @@ export type GameEvents = {
     material: 'concrete' | 'wood' | 'metal' | 'flesh';
     /** Bullet passed through (exit wound on the far side). */
     penetrated: boolean;
+    /** Weapon id of the round (VFX style). */
+    weapon?: string;
   };
   reloadStart: { weapon: string; time: number };
   reloadEnd: { weapon: string };

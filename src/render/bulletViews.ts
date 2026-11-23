@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { TracerStyle } from './weaponVfx';
 
 /** What the renderer needs from a flying bullet (sim data, interpolated per frame). */
 export interface BulletVisual {
@@ -11,6 +12,10 @@ export interface BulletVisual {
   length: number; // trail length (m)
   /** Bold trace (shotgun): hot glow around the streak + a lingering smoke trail. */
   bold?: boolean;
+  /** Premium VFX style (drawn by weaponVfx.Tracers instead of here). */
+  style?: TracerStyle;
+  /** 0..1 per-bullet random seed for visual variation. */
+  seed?: number;
 }
 
 /** Distance from the shooter's centre to the gun muzzle: nothing is drawn behind it. */
@@ -64,6 +69,7 @@ export class BulletViews {
     let n = 0, g = 0;
     this.seen.clear();
     for (const b of list) {
+      if (b.style) continue; // drawn by weaponVfx
       if (n >= this.core.instanceMatrix.count) break;
       p.set(b.px + (b.x - b.px) * alpha, b.py + (b.y - b.py) * alpha, b.pz + (b.z - b.pz) * alpha);
       // Trail is clipped at the muzzle so the bullet never appears behind/inside the shooter.

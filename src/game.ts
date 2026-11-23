@@ -17,6 +17,7 @@ import { WaveDirector, type WaveEvent } from './systems/waves';
 import { Pickups, LOOT, type PickupKind } from './systems/pickups';
 import { Group, groups, ALL, PhysicsWorld, MATERIAL_COST, type RayHit } from './physics/physicsWorld';
 import { BulletViews, type BulletVisual } from './render/bulletViews';
+import { WeaponVfx, TRACER_STYLES } from './render/weaponVfx';
 import type { WeaponDef } from './weapons/weapon';
 import { Renderer } from './render/renderer';
 import { HumanoidRig, SURVIVOR_LOOK } from './render/humanoidRig';
@@ -117,6 +118,7 @@ export class Game {
   readonly stats = { grenadesThrown: 0, grenadeBlasts: 0, shots: 0, hits: 0, ticks: 0, maxImpactSpeed: 0, penetrations: 0, activeReloads: 0, zombieHits: 0, kills: 0, dismembers: 0, damageTaken: 0, wave: 0, barrels: 0 };
   private readonly bullets: Bullet[] = [];
   private readonly bulletViews: BulletViews;
+  private readonly vfx: WeaponVfx;
   private readonly holes: BulletHoles;
   private readonly blood: BulletHoles;
   private readonly impacts: import('./entities/zombieManager').ImpactResult[] = [];
@@ -164,6 +166,7 @@ export class Game {
     this.flash = new MuzzleFlash(scene);
     this.holes = new BulletHoles(scene);
     this.bulletViews = new BulletViews(scene);
+    this.vfx = new WeaponVfx(scene, this.sparks);
     this.blood = new BulletHoles(scene, quality.name === 'mobile' ? 40 : 80, 0x5c070a, 0.32, 30, 0.8);
     scene.add(this.sparks.mesh, this.debris.mesh);
 
@@ -399,7 +402,7 @@ export class Game {
       this.stats.shots++;
       this.bullets.push({
         x: p.x, y: BULLET_HEIGHT, z: p.z, px: p.x, py: BULLET_HEIGHT, pz: p.z, ox: p.x, oy: BULLET_HEIGHT, oz: p.z, dx, dy, dz,
-        travelled: 0, width: def.traceWidth, length: def.traceLength, bold: def.boldTrace, def, power: def.penetration, skip: new Set<number>(),
+        travelled: 0, width: def.traceWidth, length: def.traceLength, bold: def.boldTrace, style: TRACER_STYLES[def.id], seed: Math.random(), def, power: def.penetration, skip: new Set<number>(),
       });
     }
     // Once per trigger pull (not per pellet): muzzle FX/sound, and recoil shoving the shooter back.
@@ -469,7 +472,7 @@ export class Game {
       const v = body!.linvel();
       this.stats.maxImpactSpeed = Math.max(this.stats.maxImpactSpeed, Math.hypot(v.x, v.y, v.z));
     }
-    this.events.emit('hit', { x: ex, y: ey, z: ez, nx: hit.normal.x, ny: hit.normal.y, nz: hit.normal.z, dynamic, material, penetrated });
+    this.events.emit('hit', { x: ex, y: ey, z: ez, nx: hit.normal.x, ny: hit.normal.y, nz: hit.normal.z, dynamic, material, penetrated, weapon: def.id });
     if (!penetrated) return false;
     this.stats.penetrations++;
     b.power -= cost;
@@ -569,7 +572,9 @@ export class Game {
       this.rig.muzzle.getWorldPosition(v3);
       // SMG: every 3rd round blooms a bigger flash so sustained fire flickers like a real muzzle.
       const big = def.automatic && this.stats.shots % 3 === 0;
-      this.flash.fire(v3, this.visYaw, def.automatic ? (big ? 1.6 : 0.8) : 1);
+      const style = TRACER_STYLES[def.id];
+      this.flash.fire(v3, this.visYaw, def.automatic ? (big ? 1.6 : 0.8) : 1, !style);
+      if (style) { this.vfx.muzzleFlash(style, v3.x, v3.y, v3.z, e.dx, e.dz); this.rig.muzzle.getWorldPosition(v3); }
       this.recoil = Math.min(1, this.recoil + def.recoil);
       this.renderer.addShake(def.shake);
       if (def.id === 'smg') this.sfx.smgShot(); else if (def.id === 'shotgun') { this.sfx.shotgun(); this.sfx.pump(0.3); } else this.sfx.gunshot();
@@ -606,7 +611,9 @@ export class Game {
     ev.on('hit', (e) => {
       const m = e.material;
       // Brief bright flash where the bullet lands (cosmetic only).
-      this.sparks.emit(e.x, e.y, e.z, 0, 0, 0, 0.16, 0.06, m === 'flesh' ? 0xff6a50 : 0xfff0b0, 0, 0, 0, 0);
+      const st = e.weapon ? TRACER_STYLES[e.weapon] : undefined;
+      if (st) this.vfx.impactFlash(st, e.x, e.y, e.z, e.nx, e.ny, e.nz, m === 'flesh');
+      else this.sparks.emit(e.x, e.y, e.z, 0, 0, 0, 0.16, 0.06, m === 'flesh' ? 0xff6a50 : 0xfff0b0, 0, 0, 0, 0);
       // Sparks: lots on metal, a few on concrete, none on wood (splinters instead).
       const sparks = m === 'metal' ? 12 : m === 'concrete' ? 5 : 0;
       for (let i = 0; i < sparks; i++) {
@@ -746,6 +753,7 @@ export class Game {
 
     this.flash.update(frameDt);
     this.bulletViews.update(this.bullets, alpha, frameDt);
+    this.vfx.update(this.bullets, alpha, frameDt);
     // Bold (shotgun) pellets shed hot sparks as they fly; the muzzle blast cone flashes and fades.
     for (const b of this.bullets) {
       if (b.bold && Math.random() < 0.35) this.sparks.emit(b.x, b.y, b.z, b.dx * 3 + (Math.random() - 0.5), Math.random() * 1.5, b.dz * 3 + (Math.random() - 0.5),

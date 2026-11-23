@@ -115,13 +115,14 @@ export class MuzzleFlash {
     scene.add(this.light, this.flash);
   }
 
-  fire(p: THREE.Vector3, yaw: number, power = 1): void {
+  /** `mesh` false: light only (weapons with a premium voxel flash draw their own). */
+  fire(p: THREE.Vector3, yaw: number, power = 1, mesh = true): void {
     this.light.position.copy(p);
     this.flash.position.copy(p);
     this.flash.rotation.set(Math.random() * 0.5, yaw, Math.random() * Math.PI);
     const s = (0.16 + Math.random() * 0.08) * power;
     this.flash.scale.set(s, s, s * 2.2);
-    this.flash.visible = true;
+    this.flash.visible = mesh;
     this.life = 0.05;
     this.light.intensity = 30 * power;
     this.peak = 30 * power;
