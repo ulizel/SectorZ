@@ -142,6 +142,7 @@ export class MuzzleFlash {
   readonly light = new THREE.PointLight(0xffb45a, 0, 9, 1.6);
   private readonly flash: THREE.Mesh;
   private life = 0;
+  private peak = 30;
 
   constructor(scene: THREE.Scene) {
     this.flash = new THREE.Mesh(UNIT_BOX, new THREE.MeshBasicMaterial({ color: 0xffd27a, toneMapped: false }));
@@ -149,21 +150,22 @@ export class MuzzleFlash {
     scene.add(this.light, this.flash);
   }
 
-  fire(p: THREE.Vector3, yaw: number): void {
+  fire(p: THREE.Vector3, yaw: number, power = 1): void {
     this.light.position.copy(p);
     this.flash.position.copy(p);
     this.flash.rotation.set(Math.random() * 0.5, yaw, Math.random() * Math.PI);
-    const s = 0.16 + Math.random() * 0.08;
+    const s = (0.16 + Math.random() * 0.08) * power;
     this.flash.scale.set(s, s, s * 2.2);
     this.flash.visible = true;
     this.life = 0.05;
-    this.light.intensity = 30;
+    this.light.intensity = 30 * power;
+    this.peak = 30 * power;
   }
 
   update(dt: number): void {
     if (this.life <= 0) return;
     this.life -= dt;
-    this.light.intensity = Math.max(0, (this.life / 0.05) * 30);
+    this.light.intensity = Math.max(0, (this.life / 0.05) * this.peak);
     if (this.life <= 0) { this.flash.visible = false; this.light.intensity = 0; }
   }
 }

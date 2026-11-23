@@ -17,18 +17,19 @@ export interface WeaponDef {
   aimTurn: number; // max aim turn speed, rad/s (weapon handling)
   settle: number; // how fast accuracy recovers when steady, 1/s
   recoilBloom: number; // accuracy lost per shot
+  aimKick: number; // random aim jolt per shot, radians (felt recoil)
 }
 
 export const WEAPONS: Record<string, WeaponDef> = {
   pistol: {
     id: 'pistol', name: 'Pistol', damage: 25, fireInterval: 0.2, magSize: 12, reloadTime: 1.1,
     spread: 0.012, range: 40, impulse: 10, pellets: 1, automatic: false, shake: 0.2, recoil: 1,
-    aimTurn: 9, settle: 3.5, recoilBloom: 1.2,
+    aimTurn: 9, settle: 3.5, recoilBloom: 1.2, aimKick: 0,
   },
   smg: {
     id: 'smg', name: 'SMG', damage: 14, fireInterval: 0.085, magSize: 30, reloadTime: 1.6,
     spread: 0.03, range: 32, impulse: 6, pellets: 1, automatic: true, shake: 0.1, recoil: 0.55,
-    aimTurn: 6, settle: 2.5, recoilBloom: 0.35,
+    aimTurn: 6, settle: 2.5, recoilBloom: 0.35, aimKick: 0.018,
   },
 };
 

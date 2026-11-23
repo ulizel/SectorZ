@@ -269,11 +269,13 @@ export class Game {
     ev.on('shot', (e) => {
       const def = this.player.weapon.def;
       this.rig.muzzle.getWorldPosition(v3);
-      this.flash.fire(v3, this.visYaw);
+      // SMG: every 3rd round blooms a bigger flash so sustained fire flickers like a real muzzle.
+      const big = def.automatic && this.stats.shots % 3 === 0;
+      this.flash.fire(v3, this.visYaw, def.automatic ? (big ? 1.6 : 0.8) : 1);
       this.tracers.spawn(v3, v3b.set(e.x, e.y, e.z));
       this.recoil = Math.min(1, this.recoil + def.recoil);
       this.renderer.addShake(def.shake);
-      this.sfx.gunshot();
+      if (def.id === 'smg') this.sfx.smgShot(); else this.sfx.gunshot();
       this.sfx.casing();
       // Ejected brass casing flies out to the right.
       const rx = -Math.cos(this.visYaw), rz = Math.sin(this.visYaw);

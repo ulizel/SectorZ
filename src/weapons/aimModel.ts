@@ -48,7 +48,10 @@ export class AimModel {
     this.bloom += (target - this.bloom) * (1 - Math.exp(-rate * dt));
   }
 
-  onShot(def: WeaponDef): void { this.bloom = Math.min(MAX_BLOOM, this.bloom + def.recoilBloom); }
+  onShot(def: WeaponDef, rand: () => number = Math.random): void {
+    this.bloom = Math.min(MAX_BLOOM, this.bloom + def.recoilBloom);
+    this.angle += (rand() * 2 - 1) * def.aimKick; // recoil jolts the aim; the stick pulls it back
+  }
 
   spread(def: WeaponDef): number { return def.spread * (1 + this.bloom); }
 }

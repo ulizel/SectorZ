@@ -67,6 +67,12 @@ export class Sfx {
     this.burst(0.05, 7000, 0.5, 0.5, 'highpass');
     this.tone(150, 45, 0.16, 0.9);
   }
+  /** SMG: shorter, deeper, punchier report (fires ~12/s, so it must not smear). */
+  smgShot(): void {
+    this.burst(0.09, 1700, 0.8, 0.8);
+    this.burst(0.03, 5000, 0.6, 0.35, 'highpass');
+    this.tone(95 + Math.random() * 15, 38, 0.11, 1.0);
+  }
   impact(hard: boolean): void { this.burst(hard ? 0.06 : 0.09, hard ? 2400 : 900, 1.5, 0.25, 'bandpass'); }
   dry(): void { this.burst(0.03, 4000, 4, 0.3, 'bandpass'); }
   reloadStart(): void { this.burst(0.05, 1800, 6, 0.35, 'bandpass'); this.burst(0.04, 1200, 6, 0.3, 'bandpass', 0.12); }

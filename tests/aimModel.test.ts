@@ -53,4 +53,12 @@ describe('AimModel', () => {
     for (let i = 0; i < 120; i++) { a.hold(DT); a.updateBloom(def, 0, DT); }
     expect(a.spread(def)).toBeLessThan(def.spread * 1.1);
   });
+
+  it('SMG recoil jolts the aim, pistol does not', () => {
+    const a = new AimModel();
+    a.onShot(WEAPONS.pistol, () => 1);
+    expect(a.angle).toBe(0);
+    a.onShot(WEAPONS.smg, () => 1);
+    expect(a.angle).toBeCloseTo(WEAPONS.smg.aimKick);
+  });
 });
