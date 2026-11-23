@@ -38,8 +38,6 @@ export interface WeaponDef {
    * A boosted pellet beats limbs' break impulses (they tear off at once) and slams the body back.
    */
   closeBoost?: { range: number; fade: number; mul: number };
-  /** Heavy muzzle smoke cloud on each shot (shotgun). */
-  boldTrace?: boolean;
   /** Multiplier on damage dealt to a limb's own health (how fast it tears limbs off). */
   limbMult: number;
   /** Hit-reaction strength on zombies (pistol: clear jolt per shot; SMG: small tremors that build). */
@@ -79,7 +77,7 @@ export const WEAPONS: Record<string, WeaponDef> = {
     reserveStart: 18, reserveMax: 36,
     bulletSpeed: 65, vSpread: 0.05, limbMult: 1.4, flinch: 1.2,
     traceWidth: 0.07, traceLength: 0.8, falloffStart: 6, shellReload: true,
-    closeBoost: { range: 3, fade: 6, mul: 4 }, boldTrace: true,
+    closeBoost: { range: 3, fade: 6, mul: 4 },
   },
 };
 

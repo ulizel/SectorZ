@@ -561,17 +561,8 @@ export class Game {
       this.renderer.addShake(def.shake);
       if (def.id === 'smg') this.sfx.smgShot(); else if (def.id === 'shotgun') { this.sfx.shotgun(); this.sfx.pump(0.3); } else this.sfx.gunshot();
       if (def.casingSound) this.sfx.casing();
-      if (def.boldTrace) {
-        // A thick smoke cloud pushed out of the barrel.
-        for (let i = 0; i < 6; i++) {
-          const sp = (Math.random() - 0.5) * 2;
-          this.debris.emit(v3.x + e.dx * 0.3, v3.y, v3.z + e.dz * 0.3,
-            e.dx * (1.5 + Math.random() * 1.5) + e.dz * sp, 0.3 + Math.random() * 0.4, e.dz * (1.5 + Math.random() * 1.5) - e.dx * sp,
-            0.16 + Math.random() * 0.12, 0.8 + Math.random() * 0.5, 0x9a9690, 0, -0.6, 3, 2);
-        }
-      }
-      // Muzzle smoke: slow grey puffs drifting up.
-      for (let i = 0; i < (def.automatic ? 1 : 3); i++) {
+      // Muzzle smoke: slow grey puffs drifting up (styled weapons make their own in vfx.muzzleFlash).
+      for (let i = 0; i < (style ? 0 : def.automatic ? 1 : 3); i++) {
         this.debris.emit(v3.x + e.dx * 0.1, v3.y, v3.z + e.dz * 0.1,
           e.dx * 0.8 + (Math.random() - 0.5) * 0.4, 0.4 + Math.random() * 0.3, e.dz * 0.8 + (Math.random() - 0.5) * 0.4,
           0.1 + Math.random() * 0.08, 0.7 + Math.random() * 0.4, 0x8b8f94, 0, -0.6, 2.5, 2);
