@@ -3,6 +3,7 @@ import { ARENA, PROPS } from '../config';
 import { rng } from '../core/math';
 import { Group, groups, ALL, RAPIER, type PhysicsWorld } from '../physics/physicsWorld';
 import { box, jitterColor, PAL, UNIT_BOX } from '../render/voxel';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 export interface DynamicProp {
   body: RAPIER.RigidBody;
@@ -42,7 +43,8 @@ export function buildArena(scene: THREE.Scene, physics: PhysicsWorld, seed = 7):
   for (let i = -half; i < half; i += 1) {
     for (const [x, z] of [[i + 0.5, -half], [i + 0.5, half], [-half, i + 0.5], [half, i + 0.5]] as const) {
       const h = H * (0.75 + r() * 0.5);
-      blocks.push({ x, y: h / 2, z, w: 1.02, h, d: 1.02, color: r() < 0.5 ? PAL.concrete : PAL.concreteDark });
+      // Exactly 1 m wide: overlapping neighbours made coplanar faces z-fight (flicker).
+      blocks.push({ x, y: h / 2, z, w: 1, h, d: 1, color: r() < 0.5 ? PAL.concrete : PAL.concreteDark });
     }
   }
   for (const [x, z, wd, d] of [[0, -half, ARENA.size + 1, 1], [0, half, ARENA.size + 1, 1], [-half, 0, 1, ARENA.size + 1], [half, 0, 1, ARENA.size + 1]] as const) {
@@ -57,8 +59,8 @@ export function buildArena(scene: THREE.Scene, physics: PhysicsWorld, seed = 7):
   for (const [x, z, wd, d] of cover) addStatic(x, 0.6, z, wd, 1.2, d, r() < 0.5 ? PAL.concrete : PAL.concreteDark);
 
   // Wrecked car (static, built from blocks).
-  buildCar(blocks, -14, -14, 0.4, addStatic);
-  buildCar(blocks, 13, 12, -0.9, addStatic);
+  buildCar(scene, physics, -14, -14, 0.4);
+  buildCar(scene, physics, 13, 12, -0.9);
 
   // Instanced static blocks: one draw call for all the concrete.
   const inst = new THREE.InstancedMesh(UNIT_BOX, new THREE.MeshLambertMaterial({ color: 0xffffff }), blocks.length);
@@ -105,11 +107,9 @@ export function buildArena(scene: THREE.Scene, physics: PhysicsWorld, seed = 7):
     const crateCol = w.createCollider(RAPIER.ColliderDesc.cuboid(sz / 2, sz / 2, sz / 2).setDensity(PROPS.crateDensity)
       .setFriction(0.7).setRestitution(0.15).setCollisionGroups(groups(Group.PROP, ALL)), body);
     physics.materials.set(crateCol.handle, 'wood');
-    const g = new THREE.Group();
-    g.add(box(sz, sz, sz, PAL.crate));
-    // Plank edges for voxel detail.
-    for (const yy of [-1, 1]) g.add(box(sz * 1.02, sz * 0.12, sz * 1.02, PAL.crateEdge, 0, yy * sz * 0.44, 0));
-    g.add(box(sz * 1.02, sz * 0.12, sz * 0.2, PAL.crateEdge, 0, 0, 0));
+    // One box (12 triangles) with a pixel plank texture: no overlapping faces, no z-fighting.
+    const g = new THREE.Mesh(crateGeo(sz), crateMaterial());
+    g.castShadow = g.receiveShadow = true;
     scene.add(g);
     props.push({ body, mesh: g, kind: 'crate' });
   };
@@ -118,15 +118,9 @@ export function buildArena(scene: THREE.Scene, physics: PhysicsWorld, seed = 7):
     const barrelCol = w.createCollider(RAPIER.ColliderDesc.cylinder(0.6, 0.36).setDensity(PROPS.barrelDensity).setFriction(0.6).setRestitution(0.2)
       .setCollisionGroups(groups(Group.PROP, ALL)), body);
     physics.materials.set(barrelCol.handle, 'metal');
-    const g = new THREE.Group();
-    const cyl = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.36, 1.2, 8), new THREE.MeshLambertMaterial({ color: PAL.barrel, flatShading: true }));
-    cyl.castShadow = cyl.receiveShadow = true;
-    g.add(cyl);
-    for (const yy of [-0.35, 0.35]) {
-      const band = new THREE.Mesh(new THREE.CylinderGeometry(0.375, 0.375, 0.08, 8), new THREE.MeshLambertMaterial({ color: PAL.barrelBand, flatShading: true }));
-      band.position.y = yy;
-      g.add(band);
-    }
+    // One merged 8-sided mesh (barrel + raised bands), one draw call.
+    const g = new THREE.Mesh(barrelGeo(), barrelMaterial());
+    g.castShadow = g.receiveShadow = true;
     scene.add(g);
     props.push({ body, mesh: g, kind: 'barrel' });
   };
@@ -143,17 +137,101 @@ export function buildArena(scene: THREE.Scene, physics: PhysicsWorld, seed = 7):
 
 function quatY(a: number) { return { x: 0, y: Math.sin(a / 2), z: 0, w: Math.cos(a / 2) }; }
 
-function buildCar(blocks: Block[], cx: number, cz: number, yaw: number,
-  addStatic: (x: number, y: number, z: number, w: number, h: number, d: number, c: number, v?: boolean, mat?: 'concrete' | 'metal') => void): void {
-  const c = Math.cos(yaw), s = Math.sin(yaw);
-  const put = (lx: number, y: number, lz: number, w: number, h: number, d: number, color: number) => {
-    // Axis-aligned approximation: rotate the centre only (blocks stay boxy — reads as wreckage).
-    blocks.push({ x: cx + lx * c + lz * s, y, z: cz - lx * s + lz * c, w, h, d, color });
+/**
+ * Wrecked car: one merged, properly rotated voxel mesh, with colliders that match the body
+ * and cabin exactly (bullets fly over the bonnet and hit the cabin, no invisible walls).
+ */
+function buildCar(scene: THREE.Scene, physics: PhysicsWorld, cx: number, cz: number, yaw: number): void {
+  const parts: [number, number, number, number, number, number, number][] = [
+    // x, y, z (local), w, h, d, colour
+    [0, 0.55, 0, 1.9, 0.7, 4, PAL.rust],
+    [0, 1.15, -0.3, 1.7, 0.5, 2, 0x6f7f8a],
+    [-0.9, 0.3, 1.3, 0.3, 0.6, 0.6, 0x1d1d1f], [0.9, 0.3, 1.3, 0.3, 0.6, 0.6, 0x1d1d1f],
+    [-0.9, 0.3, -1.3, 0.3, 0.6, 0.6, 0x1d1d1f], [0.9, 0.3, -1.3, 0.3, 0.6, 0.6, 0x1d1d1f],
+  ];
+  const mesh = new THREE.Mesh(mergeColoredBoxes(parts), new THREE.MeshLambertMaterial({ vertexColors: true }));
+  mesh.position.set(cx, 0, cz);
+  mesh.rotation.y = yaw;
+  mesh.castShadow = mesh.receiveShadow = true;
+  scene.add(mesh);
+  const rot = quatY(yaw);
+  for (const [lx, ly, lz, w, h, d] of parts.slice(0, 2)) {
+    const x = cx + lx * Math.cos(yaw) + lz * Math.sin(yaw), z = cz - lx * Math.sin(yaw) + lz * Math.cos(yaw);
+    const col = physics.world.createCollider(RAPIER.ColliderDesc.cuboid(w / 2, h / 2, d / 2).setTranslation(x, ly, z)
+      .setRotation(rot).setCollisionGroups(groups(Group.STATIC, ALL)).setFriction(0.8));
+    physics.materials.set(col.handle, 'metal');
+  }
+}
+
+/** Merge coloured boxes into one geometry (vertex colours, no UVs). */
+function mergeColoredBoxes(parts: [number, number, number, number, number, number, number][]): THREE.BufferGeometry {
+  const col = new THREE.Color();
+  return mergeGeometries(parts.map(([x, y, z, w, h, d, c]) => {
+    const g = new THREE.BoxGeometry(w, h, d).translate(x, y, z);
+    g.deleteAttribute('uv');
+    col.setHex(c);
+    const n = g.attributes.position.count, arr = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) arr.set([col.r, col.g, col.b], i * 3);
+    g.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+    return g;
+  }))!;
+}
+
+const crateGeos = new Map<number, THREE.BufferGeometry>();
+function crateGeo(sz: number): THREE.BufferGeometry {
+  let g = crateGeos.get(sz);
+  if (!g) { g = new THREE.BoxGeometry(sz, sz, sz); crateGeos.set(sz, g); }
+  return g;
+}
+
+let crateMat: THREE.MeshLambertMaterial | null = null;
+/** 16×16 pixel crate face: frame, planks, diagonal brace. Nearest filtering keeps it voxel-crisp. */
+function crateMaterial(): THREE.MeshLambertMaterial {
+  if (crateMat) return crateMat;
+  const N = 16, cv = document.createElement('canvas');
+  cv.width = cv.height = N;
+  const ctx = cv.getContext('2d')!;
+  const px = (x: number, y: number, c: string) => { ctx.fillStyle = c; ctx.fillRect(x, y, 1, 1); };
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    const plank = Math.floor(y / 4) % 2 === 0 ? '#a0703f' : '#9a6a3a';
+    const seam = y % 4 === 0 ? '#7a5230' : plank;
+    px(x, y, seam);
+  }
+  for (let i = 0; i < N; i++) {
+    px(i, 0, '#6e4a27'); px(i, 1, '#6e4a27'); px(i, N - 1, '#6e4a27'); px(i, N - 2, '#6e4a27');
+    px(0, i, '#6e4a27'); px(1, i, '#6e4a27'); px(N - 1, i, '#6e4a27'); px(N - 2, i, '#6e4a27');
+    if (i > 1 && i < N - 2) { px(i, i, '#6e4a27'); px(i, Math.min(N - 3, i + 1), '#6e4a27'); }
+  }
+  const t = new THREE.CanvasTexture(cv);
+  t.magFilter = THREE.NearestFilter;
+  t.minFilter = THREE.NearestMipmapLinearFilter;
+  t.colorSpace = THREE.SRGBColorSpace;
+  crateMat = new THREE.MeshLambertMaterial({ map: t });
+  return crateMat;
+}
+
+let barrelG: THREE.BufferGeometry | null = null;
+function barrelGeo(): THREE.BufferGeometry {
+  if (barrelG) return barrelG;
+  const col = new THREE.Color();
+  const make = (r: number, h: number, y: number, c: number) => {
+    // Open-ended bands (no caps hidden inside the barrel = fewer triangles).
+    const g = new THREE.CylinderGeometry(r, r, h, 8, 1, c !== PAL.barrel).translate(0, y, 0).toNonIndexed();
+    g.deleteAttribute('uv');
+    col.setHex(c);
+    const n = g.attributes.position.count, arr = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) arr.set([col.r, col.g, col.b], i * 3);
+    g.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+    return g;
   };
-  put(0, 0.55, 0, 1.9, 0.7, 4, PAL.rust);
-  put(0, 1.15, -0.3, 1.7, 0.55, 2, 0x6f7f8a);
-  for (const [lx, lz] of [[-0.95, 1.3], [0.95, 1.3], [-0.95, -1.3], [0.95, -1.3]]) put(lx, 0.3, lz, 0.3, 0.6, 0.6, 0x1d1d1f);
-  addStatic(cx, 0.75, cz, Math.abs(1.9 * c) + Math.abs(4 * s), 1.5, Math.abs(1.9 * s) + Math.abs(4 * c), 0, false, 'metal');
+  barrelG = mergeGeometries([make(0.36, 1.2, 0, PAL.barrel), make(0.375, 0.08, -0.35, PAL.barrelBand), make(0.375, 0.08, 0.35, PAL.barrelBand)])!;
+  barrelG.computeVertexNormals(); // flat 8-sided look comes from the non-indexed faces
+  return barrelG;
+}
+
+let barrelMat: THREE.MeshLambertMaterial | null = null;
+function barrelMaterial(): THREE.MeshLambertMaterial {
+  return (barrelMat ??= new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true }));
 }
 
 function groundTexture(r: () => number): THREE.CanvasTexture {

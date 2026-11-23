@@ -16,6 +16,10 @@ export class Renderer {
   private readonly raycaster = new THREE.Raycaster();
   private readonly ndc = new THREE.Vector2();
   private readonly plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  /** Sun orientation (fixed direction) for texel-snapping the shadow camera in light space. */
+  private readonly lightRot = new THREE.Matrix4().lookAt(new THREE.Vector3(-12, 22, 8), new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 1, 0));
+  private readonly lightInv = this.lightRot.clone().invert();
+  private readonly lightSpace = new THREE.Vector3();
 
   constructor(container: HTMLElement, readonly quality: QualityPreset) {
     this.renderer = new THREE.WebGLRenderer({ antialias: quality.antialias, powerPreference: 'high-performance' });
@@ -72,9 +76,15 @@ export class Renderer {
       this.camTarget.z + CAMERA.back * zoom + this.shakeOffset.z,
     );
     this.camera.lookAt(this.camTarget.x, 0, this.camTarget.z);
-    // Keep the shadow frustum tight around the action.
-    this.sun.position.set(this.camTarget.x - 12, 22, this.camTarget.z + 8);
-    this.sun.target.position.set(this.camTarget.x, 0, this.camTarget.z);
+    // Keep the shadow frustum tight around the action, snapped to whole shadow-map texels so
+    // shadow edges don't shimmer ("flicker") as the camera glides.
+    const texel = 36 / this.quality.shadowMapSize;
+    const lp = this.lightSpace.copy(this.camTarget).applyMatrix4(this.lightInv);
+    lp.x = Math.round(lp.x / texel) * texel;
+    lp.y = Math.round(lp.y / texel) * texel;
+    lp.applyMatrix4(this.lightRot);
+    this.sun.position.set(lp.x - 12, lp.y + 22, lp.z + 8);
+    this.sun.target.position.copy(lp);
   }
 
   snapCamera(x: number, z: number): void { this.camTarget.set(x, 0, z); }
