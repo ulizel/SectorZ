@@ -32,6 +32,11 @@ interface Brain {
 }
 
 export interface AITarget { x: number; z: number; alive: boolean }
+/** A movable obstacle (crate, barrel) zombies avoid and can only shove with limited force. */
+export interface AIProp { body: { translation(): { x: number; y: number; z: number }; applyImpulse(i: { x: number; y: number; z: number }, wake: boolean): void; mass(): number }; radius: number }
+
+/** Force (N) a zombie can push a prop with: a 20 kg crate on rough ground barely slides. */
+export const PUSH_FORCE = 130;
 export interface AttackResult { zombie: Zombie; damage: number }
 
 const tmp = { x: 0, z: 0 };
@@ -47,6 +52,10 @@ export class ZombieAI {
   /** Spatial hash for neighbour queries. */
   private readonly hash = new Map<number, Zombie[]>();
   enabled = true;
+  /** Movable props (set by the game). */
+  props: AIProp[] = [];
+  private readonly propPos: { x: number; z: number; r: number }[] = [];
+  private dt = 1 / 60;
 
   constructor(private readonly physics: PhysicsWorld, arenaSize: number) {
     this.nav = new NavGrid(physics, arenaSize);
@@ -79,8 +88,17 @@ export class ZombieAI {
 
   update(dt: number, target: AITarget, zombies: Zombie[], attacks: AttackResult[]): void {
     attacks.length = 0;
+    this.dt = dt;
+    // Current prop footprints (they move, so refresh every tick; cheap).
+    this.propPos.length = 0;
+    for (const p of this.props) { const t = p.body.translation(); if (t.y > -1) this.propPos.push({ x: t.x, z: t.z, r: p.radius }); }
     this.flowT -= dt;
-    if (this.flowT <= 0) { this.nav.setTarget(target.x, target.z); this.flowT = 0.2; }
+    if (this.flowT <= 0) {
+      // Props are soft obstacles in the flow field: paths go around them when there's room.
+      this.nav.setSoftObstacles(this.propPos);
+      this.nav.setTarget(target.x, target.z, true);
+      this.flowT = 0.25;
+    }
     // Spatial hash (2 m cells) of active zombies.
     this.hash.clear();
     for (const z of zombies) {
@@ -171,6 +189,11 @@ export class ZombieAI {
     this.separation(z, tmp);
     const sx = tmp.x, sz = tmp.z;
     dirX += sx * 3; dirZ += sz * 3;
+    // Steer around nearby props (local avoidance on top of the flow field).
+    for (const pp of this.propPos) {
+      const ax = z.x - pp.x, az = z.z - pp.z, d = Math.hypot(ax, az), reach = pp.r + 0.9;
+      if (d < reach && d > 1e-4) { const f = (reach - d) / reach; dirX += (ax / d) * f * 1.5; dirZ += (az / d) * f * 1.5; }
+    }
     const dl = Math.hypot(dirX, dirZ);
     if (dl > 1e-4) { dirX /= dl; dirZ /= dl; }
     // Turn toward the travel direction, and walk where we face (no moonwalking).
@@ -210,7 +233,24 @@ export class ZombieAI {
 
   /** Move with wall sliding against the inflated nav grid. Returns distance moved. */
   private move(z: Zombie, dx: number, dz: number, dist: number, _dt: number): number {
-    const nx = z.x + dx * dist, nz = z.z + dz * dist;
+    let nx = z.x + dx * dist, nz = z.z + dz * dist;
+    // Props are solid to zombies: stop at their edge and shove them with limited force.
+    for (const p of this.props) {
+      const t = p.body.translation();
+      if (t.y < -1) continue;
+      const ax = nx - t.x, az = nz - t.z, d = Math.hypot(ax, az), min = p.radius + 0.3;
+      if (d >= min || d < 1e-4) continue;
+      // Shove along the push direction; heavy props barely move (friction does the rest).
+      const into = Math.max(0, -(dx * ax + dz * az) / d);
+      if (into > 0) {
+        const j = PUSH_FORCE * this.dt * into;
+        p.body.applyImpulse({ x: -(ax / d) * j, y: 0, z: -(az / d) * j }, true);
+      }
+      nx = t.x + (ax / d) * min; nz = t.z + (az / d) * min; // slide around the edge
+    }
+    dist = Math.hypot(nx - z.x, nz - z.z);
+    if (dist < 1e-6) return 0;
+    dx = (nx - z.x) / dist; dz = (nz - z.z) / dist;
     if (!this.nav.isBlocked(nx, nz)) { z.x = nx; z.z = nz; return dist; }
     if (!this.nav.isBlocked(nx, z.z)) { z.x = nx; return Math.abs(dx * dist); }
     if (!this.nav.isBlocked(z.x, nz)) { z.z = nz; return Math.abs(dz * dist); }

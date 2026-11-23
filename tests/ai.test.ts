@@ -97,6 +97,33 @@ describe('zombie AI', () => {
     expect(z.parts[PART_INDEX.pelvis].body.translation().y).toBeLessThan(0.4); // on the ground
   });
 
+  it('walks around a crate in its way, and does not drag it along', () => {
+    const { p, m, ai, target, run } = setup();
+    // A 1.2 m, ~21 kg crate directly between the zombie and the player.
+    const body = p.world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(0, 0.6, -3));
+    p.world.createCollider(RAPIER.ColliderDesc.cuboid(0.6, 0.6, 0.6).setDensity(12).setFriction(0.7).setCollisionGroups(groups(Group.PROP, ALL)), body);
+    ai.props = [{ body, radius: 0.75 }];
+    const z = m.spawn(0, -7, 0);
+    ai.alertAll(m.zombies);
+    run(60 * 12);
+    const t = body.translation();
+    expect(Math.hypot(t.x - 0, t.z + 3)).toBeLessThan(0.3); // crate barely moved
+    expect(Math.hypot(z.x - target.x, z.z - target.z)).toBeLessThan(AI.attackRange + 0.3); // still reached the player
+  });
+
+  it('a zombie pressing straight into a crate (no way around) only shoves it slowly', () => {
+    const { p, m, ai, target, run } = setup([[-1.6, -3, 0.5, 4], [1.6, -3, 0.5, 4]]); // corridor 2.2 m wide
+    const body = p.world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(0, 0.6, -3));
+    p.world.createCollider(RAPIER.ColliderDesc.cuboid(0.6, 0.6, 0.6).setDensity(12).setFriction(0.7).setCollisionGroups(groups(Group.PROP, ALL)), body);
+    ai.props = [{ body, radius: 0.75 }];
+    m.spawn(0, -6, 0);
+    target.z = 2;
+    ai.alertAll(m.zombies);
+    run(60 * 5);
+    const moved = Math.hypot(body.translation().x, body.translation().z + 3);
+    expect(moved).toBeLessThan(1.5); // a walking zombie would have carried it ~6 m
+  });
+
   it('performance: 30 chasing zombies stay inside the budget', () => {
     const { p, m, ai, target, run } = setup([[5, 0, 0.3, 4], [-5, 3, 3, 0.3]]);
     for (let i = 0; i < 30; i++) m.spawn(Math.cos(i * 0.7) * 14, Math.sin(i * 0.7) * 14, 0);

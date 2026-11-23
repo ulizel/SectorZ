@@ -9,6 +9,8 @@ export interface DynamicProp {
   body: RAPIER.RigidBody;
   mesh: THREE.Object3D;
   kind: 'crate' | 'barrel';
+  /** Footprint radius (m) for AI avoidance. */
+  radius: number;
 }
 
 interface Block { x: number; y: number; z: number; w: number; h: number; d: number; color: number }
@@ -111,7 +113,7 @@ export function buildArena(scene: THREE.Scene, physics: PhysicsWorld, seed = 7):
     const g = new THREE.Mesh(crateGeo(sz), crateMaterial());
     g.castShadow = g.receiveShadow = true;
     scene.add(g);
-    props.push({ body, mesh: g, kind: 'crate' });
+    props.push({ body, mesh: g, kind: 'crate', radius: sz * 0.62 });
   };
   const barrel = (x: number, z: number) => {
     const body = w.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(x, 0.6, z).setLinearDamping(0.2).setAngularDamping(0.5));
@@ -122,7 +124,7 @@ export function buildArena(scene: THREE.Scene, physics: PhysicsWorld, seed = 7):
     const g = new THREE.Mesh(barrelGeo(), barrelMaterial());
     g.castShadow = g.receiveShadow = true;
     scene.add(g);
-    props.push({ body, mesh: g, kind: 'barrel' });
+    props.push({ body, mesh: g, kind: 'barrel', radius: 0.4 });
   };
 
   for (const [x, z] of [[4, -4], [-4, 4], [5, 9], [-6, -10], [12, -3], [-12, 3]] as const) {

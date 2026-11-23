@@ -102,6 +102,7 @@ export class Game {
 
     this.props = buildArena(scene, this.physics);
     this.ai = new ZombieAI(this.physics, ARENA.size);
+    this.ai.props = this.props;
     this.zombieRenderer = new ZombieRenderer(scene);
     void ({} as Zombie);
     this.propStart = this.props.map((p) => { const t = p.body.translation(); return new THREE.Vector3(t.x, t.y, t.z); });

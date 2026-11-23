@@ -53,6 +53,11 @@ const LIMB_COLLIDER_SCALE = 0.85;
 const CCD_PARTS = new Set<PartName>(['head', 'forearmL', 'forearmR', 'upperArmL', 'upperArmR']);
 
 export const ZOMBIE_MAX_HP = 100;
+/**
+ * Animated (kinematic) zombie parts don't physically touch props: a kinematic body has infinite
+ * strength and would drag crates along. The AI pushes props with a limited force instead.
+ */
+const ALIVE_GROUPS = groups(Group.ZOMBIE, ALL & ~Group.PROP);
 export type ZombieState = 'alive' | 'knocked' | 'gettingUp' | 'dead';
 
 export interface ZombiePart {
@@ -138,7 +143,7 @@ export class Zombie {
       const collider = this.w.createCollider(
         RAPIER.ColliderDesc.cuboid(def.size[0] / 2 * s, def.size[1] / 2, def.size[2] / 2 * s)
           .setMass(def.mass).setFriction(0.8).setRestitution(0.15)
-          .setCollisionGroups(groups(Group.ZOMBIE, ALL))
+          .setCollisionGroups(ALIVE_GROUPS)
           .setActiveEvents(RAPIER.ActiveEvents.CONTACT_FORCE_EVENTS).setContactForceEventThreshold(250), body);
       physics.materials.set(collider.handle, 'flesh');
       const hp = PART_DAMAGE[def.name].hp;
@@ -407,7 +412,7 @@ export class Zombie {
       this.getUpFrom.push({ p: new THREE.Vector3(t.x, t.y, t.z), q: new THREE.Quaternion(r.x, r.y, r.z, r.w) });
       if (p.severed || p.dangling) continue;
       p.body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased, true);
-      p.collider.setCollisionGroups(groups(Group.ZOMBIE, ALL));
+      p.collider.setCollisionGroups(ALIVE_GROUPS);
       p.dynamic = false;
     }
     this.state = 'gettingUp';

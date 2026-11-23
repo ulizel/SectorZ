@@ -14,12 +14,15 @@ export class NavGrid {
   private readonly heap: Int32Array;
   private readonly heapKey: Uint32Array;
   private targetCell = -1;
+  /** Extra walking cost per cell (props): paths prefer to go around, but can still pass. */
+  readonly extra: Uint8Array;
 
   constructor(physics: PhysicsWorld, readonly size: number, readonly cell = 0.5, inflate = 0.28) {
     this.cols = this.rows = Math.ceil(size / cell);
     const n = this.cols * this.rows;
     this.blocked = new Uint8Array(n);
     this.dist = new Uint32Array(n).fill(0xffffffff);
+    this.extra = new Uint8Array(n);
     this.heap = new Int32Array(n * 8);
     this.heapKey = new Uint32Array(n * 8);
     // Rapier's scene queries only see colliders after a step: take a negligible one first.
@@ -54,11 +57,11 @@ export class NavGrid {
   }
 
   /** Rebuild the flow field toward (x, z). Cheap enough to run several times a second. */
-  setTarget(x: number, z: number): void {
+  setTarget(x: number, z: number, force = false): void {
     let start = this.cellOf(x, z);
     if (start < 0) return;
     if (this.blocked[start]) start = this.nearestOpen(start);
-    if (start === this.targetCell) return;
+    if (start === this.targetCell && !force) return;
     this.targetCell = start;
     const { cols, rows, blocked, dist, heap, heapKey } = this;
     dist.fill(0xffffffff);
@@ -105,8 +108,21 @@ export class NavGrid {
         if (blocked[ni]) continue;
         // No corner cutting past walls on diagonals.
         if (dr && dc && (blocked[r * cols + nc] || blocked[nr * cols + c])) continue;
-        const nk = k + (dr && dc ? 14 : 10);
+        const nk = k + (dr && dc ? 14 : 10) + this.extra[ni];
         if (nk < dist[ni]) { dist[ni] = nk; push(ni, nk); }
+      }
+    }
+  }
+
+  /** Mark soft obstacles (movable props): cells within `r` of each get a detour cost. */
+  setSoftObstacles(list: { x: number; z: number; r: number }[], cost = 60): void {
+    this.extra.fill(0);
+    for (const o of list) {
+      const rr = o.r + 0.3;
+      const c0 = Math.floor((o.x - rr + this.size / 2) / this.cell), c1 = Math.floor((o.x + rr + this.size / 2) / this.cell);
+      const r0 = Math.floor((o.z - rr + this.size / 2) / this.cell), r1 = Math.floor((o.z + rr + this.size / 2) / this.cell);
+      for (let r = Math.max(0, r0); r <= Math.min(this.rows - 1, r1); r++) for (let c = Math.max(0, c0); c <= Math.min(this.cols - 1, c1); c++) {
+        if (Math.hypot(this.cx(c) - o.x, this.cz(r) - o.z) <= rr) this.extra[r * this.cols + c] = cost;
       }
     }
   }
