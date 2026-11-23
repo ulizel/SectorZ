@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { initPhysics, PhysicsWorld, RAPIER, Group, groups, ALL } from '../src/physics/physicsWorld';
 import { ZombieManager } from '../src/entities/zombieManager';
-import { ZOMBIE_TYPES } from '../src/entities/zombie';
+import { ZOMBIE_TYPES, EXPLODER } from '../src/entities/zombie';
+import { ZombieAI, type AttackResult } from '../src/ai/zombieAI';
 import { PART_INDEX } from '../src/rigs/humanoid';
 import { SIM_DT } from '../src/config';
 import { waveTuning } from '../src/systems/waves';
@@ -52,10 +53,30 @@ describe('zombie types', () => {
     p.free();
   });
 
+  it('an exploder walks up to the player and lights its fuse instead of attacking', () => {
+    const { p, m } = setup();
+    const ai = new ZombieAI(p, 40);
+    const z = m.spawn(0, -5, 0, 'exploder');
+    ai.alertAll([z]);
+    const attacks: AttackResult[] = [];
+    let hits = 0;
+    for (let i = 0; i < 300 && z.fuse === undefined; i++) {
+      ai.update(SIM_DT, { x: 0, z: 0, alive: true }, m.zombies, attacks);
+      hits += attacks.length;
+      m.update(SIM_DT); p.step();
+    }
+    expect(z.fuse).toBe(EXPLODER.fuse);
+    expect(hits).toBe(0);
+    expect(Math.hypot(z.x, z.z)).toBeLessThan(1.6);
+    p.free();
+  });
+
   it('special zombies join later waves', () => {
     expect(waveTuning(1).runnerChance + waveTuning(1).bruteChance).toBe(0);
     expect(waveTuning(3).runnerChance).toBeGreaterThan(0);
     expect(waveTuning(4).bruteChance).toBe(0);
     expect(waveTuning(6).bruteChance).toBeGreaterThan(0);
+    expect(waveTuning(3).exploderChance).toBe(0);
+    expect(waveTuning(4).exploderChance).toBeGreaterThan(0);
   });
 });

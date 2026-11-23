@@ -471,6 +471,14 @@ async function arsenal(browser) {
     `blasts=${h.grenadeBlasts - e.grenadeBlasts} states=${zs2.join(',')}`);
   check('player 7 m away is outside the blast', h.damageTaken === e.damageTaken, `damage=${(h.damageTaken - e.damageTaken).toFixed(0)}`);
   await page.screenshot({ path: `${OUT}/grenade-boom.png` });
+  // Exploder: killing it makes it pop a moment later, taking a neighbour with it.
+  const k0 = await state(page);
+  await page.evaluate(() => { const g = window.__SECTORZ__.game, p = g.player; g.zombies.clear();
+    const ex = g.zombies.spawn(p.x - 6, p.z, 0, 'exploder'); g.zombies.spawn(p.x - 7, p.z, 0); ex.kill(1 / 60); });
+  await ticks(page, 60);
+  const k1 = await state(page);
+  check('killed exploder blows up and kills the zombie next to it', k1.exploderBlasts - k0.exploderBlasts === 1 && k1.kills - k0.kills === 2,
+    `blasts=${k1.exploderBlasts - k0.exploderBlasts} kills=${k1.kills - k0.kills}`);
   check('no JS errors (arsenal)', errors.length === 0, errors.join(' | '));
   await page.close();
 }

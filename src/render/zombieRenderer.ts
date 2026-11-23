@@ -155,6 +155,11 @@ export class ZombieRenderer {
         const frac = p.maxHp === Infinity ? 1 - Math.max(0, z.hp) / z.maxHp : 1 - Math.max(0, p.hp) / p.maxHp;
         const ty = z.type.tint; // per-type colouring (runner pale, brute dark)
         tint.setRGB(ty[0], ty[1], ty[2]).lerp(BRUISE, Math.min(0.8, frac * 0.8));
+        // Lit exploder: pulses brighter and faster as its fuse runs down.
+        if (z.fuse !== undefined && !z.exploded) {
+          const k = 1 - Math.max(0, z.fuse) / z.fuseTotal;
+          tint.multiplyScalar(1 + 0.9 * Math.abs(Math.sin(performance.now() / 1000 * (8 + 22 * k))));
+        }
         this.parts[k].setColorAt(i, tint);
         for (const c of r.gore) {
           if (c.part !== k || g >= goreCap) continue;

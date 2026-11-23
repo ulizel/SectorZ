@@ -19,7 +19,7 @@ export const WEAPON_UNLOCKS: { wave: number; slot: number }[] = [{ wave: 2, slot
 
 export type WaveState = 'waiting' | 'active' | 'break';
 
-export interface WaveTuning { count: number; interval: number; speedMul: number; hpMul: number; runnerChance: number; bruteChance: number }
+export interface WaveTuning { count: number; interval: number; speedMul: number; hpMul: number; runnerChance: number; bruteChance: number; exploderChance: number }
 
 export function waveTuning(n: number): WaveTuning {
   return {
@@ -30,6 +30,7 @@ export function waveTuning(n: number): WaveTuning {
     // Special zombies join the mix: runners from wave 3, brutes from wave 5, growing to a cap.
     runnerChance: n < 3 ? 0 : Math.min(0.35, 0.15 + 0.04 * (n - 3)),
     bruteChance: n < 5 ? 0 : Math.min(0.2, 0.08 + 0.03 * (n - 5)),
+    exploderChance: n < 4 ? 0 : Math.min(0.15, 0.07 + 0.02 * (n - 4)),
   };
 }
 

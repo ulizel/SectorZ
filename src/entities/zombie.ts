@@ -68,7 +68,7 @@ const PART_IDX = Object.fromEntries(HUMANOID.map((d, i) => [d.name, i])) as Reco
 const ALIVE_GROUPS = groups(Group.ZOMBIE, ALL & ~Group.PROP);
 export type ZombieState = 'alive' | 'knocked' | 'gettingUp' | 'dead';
 
-export type ZombieKind = 'walker' | 'runner' | 'brute';
+export type ZombieKind = 'walker' | 'runner' | 'brute' | 'exploder';
 /**
  * Zombie types. `scale` scales the whole body (pose AND colliders: boxes stay the truth).
  * speed = base walk speed range (m/s); slowPerHit/minSpeedMul = wound slowdown; damageMul = attack;
@@ -83,7 +83,12 @@ export const ZOMBIE_TYPES: Record<ZombieKind, {
   runner: { scale: 0.92, hp: 55, speed: [3.1, 3.6], slowPerHit: 0.1, minSpeedMul: 0.45, damageMul: 0.75, knockdownMul: 0.8, limbMul: 0.8, tint: [1.6, 1.55, 1.3] },
   // Big, slow and tanky: shrugs off wounds and small arms knockback, hits hard. Dark, reddish.
   brute: { scale: 1.32, hp: 360, speed: [0.9, 1.05], slowPerHit: 0, minSpeedMul: 1, damageMul: 2.2, knockdownMul: 3.5, limbMul: 2.2, tint: [0.78, 0.6, 0.55] },
+  // Bloated and glowing: walks up and blows itself up (or pops when killed). See EXPLODER.
+  exploder: { scale: 1.08, hp: 70, speed: [1.5, 1.8], slowPerHit: 0.05, minSpeedMul: 0.6, damageMul: 0, knockdownMul: 1.2, limbMul: 1, tint: [1.35, 1.5, 0.55] },
 };
+
+/** Exploder: fuse when it reaches the player, delay when killed, blast radius (m). */
+export const EXPLODER = { fuse: 0.9, deathFuse: 0.3, radius: 3.5 };
 
 export interface ZombiePart {
   def: PartDef;
@@ -137,6 +142,11 @@ export class Zombie {
   readonly scale: number;
   /** Attack damage multiplier. */
   damageMul = 1;
+  /** Exploder: seconds until it blows up (undefined = not lit); its total, for the warning ring. */
+  fuse?: number;
+  fuseTotal = 1;
+  /** Exploder already went off. */
+  exploded = false;
   /** Seconds since death (drives cleanup). */
   deadTime = 0;
   /** Seconds the ragdoll has been at rest. */

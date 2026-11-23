@@ -1,5 +1,5 @@
 import { NavGrid } from './navGrid';
-import type { Zombie } from '../entities/zombie';
+import { EXPLODER, type Zombie } from '../entities/zombie';
 import { PART_INDEX } from '../rigs/humanoid';
 import { angleDelta } from '../core/math';
 import { Group, groups, type PhysicsWorld } from '../physics/physicsWorld';
@@ -174,6 +174,12 @@ export class ZombieAI {
     z.attackPose = 0;
 
     if (b.mode === 'chase') {
+      if (z.kind === 'exploder' && (z.fuse !== undefined || dist < AI.attackRange * 1.3) && t.alive) {
+        // Exploders don't swing: they stop and light themselves (the game blows them up).
+        if (z.fuse === undefined) { z.fuse = z.fuseTotal = EXPLODER.fuse; }
+        z.speed = 0;
+        return;
+      }
       if (dist < (crawler ? AI.crawlAttackRange : AI.attackRange) * z.scale && t.alive) {
         b.mode = 'attack'; b.attackT = 0; b.struck = false;
         z.speed = 0;

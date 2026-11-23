@@ -61,7 +61,7 @@ export const WEAPONS: Record<string, WeaponDef> = {
     traceWidth: 0.06, traceLength: 0.9, falloffStart: 40, shellReload: false,
   },
   smg: {
-    id: 'smg', name: 'SMG', damage: 14, fireInterval: 0.085, magSize: 30, reloadTime: 1.6,
+    id: 'smg', name: 'SMG', damage: 21, fireInterval: 0.085, magSize: 30, reloadTime: 1.6,
     spread: 0.03, range: 32, impulse: 11, pellets: 1, automatic: true, shake: 0.1, recoil: 0.55,
     aimTurn: 6, settle: 2.5, recoilBloom: 0.35, aimKick: 0.006,
     recoilPattern: [0.012, 0.016, 0.014, 0.008, -0.004, -0.014, -0.018, -0.012, 0.002, 0.014, 0.018, 0.01],
@@ -71,7 +71,7 @@ export const WEAPONS: Record<string, WeaponDef> = {
   },
   shotgun: {
     id: 'shotgun', name: 'Shotgun', damage: 16, fireInterval: 0.85, magSize: 6, reloadTime: 0.45,
-    spread: 0.11, range: 22, impulse: 9, pellets: 12, automatic: false, shake: 0.55, recoil: 1,
+    spread: 0.145, range: 22, impulse: 9, pellets: 12, automatic: false, shake: 0.55, recoil: 1,
     aimTurn: 7, settle: 3, recoilBloom: 1.6, aimKick: 0.03,
     recoilPattern: [0], penetration: 0.4, pushback: 2.2, activeWindow: [2, 2], casingSound: false,
     reserveStart: 18, reserveMax: 36,

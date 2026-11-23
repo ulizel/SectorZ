@@ -11,6 +11,7 @@ import { Player } from './entities/player';
 import { ZombieManager } from './entities/zombieManager';
 import type { Zombie } from './entities/zombie';
 import { ZombieRenderer } from './render/zombieRenderer';
+import { EXPLODER } from './entities/zombie';
 import { ZombieAI, AI as AI_CFG, type AttackResult } from './ai/zombieAI';
 import { ARENA } from './config';
 import { WaveDirector, WEAPON_UNLOCKS, type WaveEvent } from './systems/waves';
@@ -110,7 +111,7 @@ export class Game {
   private grenadeMode = false;
   private throwX = 0; private throwZ = 0;
   private grenadeWanted = false; // armed last tick (for the "no grenades" toast edge)
-  readonly stats = { grenadesThrown: 0, grenadeBlasts: 0, shots: 0, hits: 0, ticks: 0, maxImpactSpeed: 0, penetrations: 0, activeReloads: 0, zombieHits: 0, kills: 0, dismembers: 0, damageTaken: 0, wave: 0, barrels: 0 };
+  readonly stats = { exploderBlasts: 0, grenadesThrown: 0, grenadeBlasts: 0, shots: 0, hits: 0, ticks: 0, maxImpactSpeed: 0, penetrations: 0, activeReloads: 0, zombieHits: 0, kills: 0, dismembers: 0, damageTaken: 0, wave: 0, barrels: 0 };
   private readonly bullets: Bullet[] = [];
   private readonly bulletViews: BulletViews;
   private readonly vfx: WeaponVfx;
@@ -354,6 +355,7 @@ export class Game {
     if (cmd.throwGrenade) this.throwGrenade(cmd.throwX, cmd.throwZ);
     this.stepBullets(dt);
     this.updateFuses(dt);
+    this.updateExploders(dt);
     this.updateGrenades(dt);
     this.physics.step();
     // Environmental impacts: bodies slammed into the world take damage; thuds for sound.
@@ -505,7 +507,7 @@ export class Game {
   }
 
   /** Barrel about to blow: ring at the blast radius, inner fill grows with the fuse (0..1). */
-  private showDangerZone(i: number, x: number, z: number, progress: number): void {
+  private showDangerZone(i: number, x: number, z: number, progress: number, radius = BARREL_BLAST_RADIUS): void {
     let ring = this.dangerZones[i];
     if (!ring) {
       ring = new THREE.Mesh(this.dangerRingGeo, this.dangerRingMat);
@@ -516,7 +518,7 @@ export class Game {
     }
     ring.visible = true;
     ring.position.set(x, 0.025, z);
-    ring.scale.setScalar(BARREL_BLAST_RADIUS);
+    ring.scale.setScalar(radius);
     ring.children[0].scale.setScalar(Math.max(0.05, Math.min(1, progress)));
     // Pulse faster as the fuse runs out.
     this.dangerRingMat.opacity = 0.55 + 0.4 * Math.abs(Math.sin(this.time * (6 + 14 * progress)));
@@ -715,6 +717,11 @@ export class Game {
       prop.mesh.quaternion.set(r.x, r.y, r.z, r.w);
       if (prop.fuse !== undefined) this.showDangerZone(warn++, t.x, t.z, 1 - prop.fuse / (prop.fuseTotal || 1));
     }
+    for (const zb of this.zombies.zombies) {
+      if (zb.fuse === undefined || zb.exploded) continue;
+      const t = zb.parts[1].body.translation();
+      this.showDangerZone(warn++, t.x, t.z, 1 - Math.max(0, zb.fuse) / zb.fuseTotal, EXPLODER.radius);
+    }
     for (let i = warn; i < this.dangerZones.length; i++) this.dangerZones[i].visible = false;
 
     this.flash.update(frameDt);
@@ -857,7 +864,8 @@ export class Game {
       const x = (Math.random() - 0.5) * (ARENA.size - 4), z = (Math.random() - 0.5) * (ARENA.size - 4);
       if (Math.hypot(x - p.x, z - p.z) < 12 || this.ai.nav.isBlocked(x, z)) continue;
       const r = Math.random();
-      const kind = r < tune.bruteChance ? 'brute' : r < tune.bruteChance + tune.runnerChance ? 'runner' : 'walker';
+      const kind = r < tune.bruteChance ? 'brute' : r < tune.bruteChance + tune.runnerChance ? 'runner'
+        : r < tune.bruteChance + tune.runnerChance + tune.exploderChance ? 'exploder' : 'walker';
       const zb = this.zombies.spawn(x, z, Math.atan2(p.x - x, p.z - z), kind);
       zb.baseSpeed *= tune.speedMul;
       zb.hp *= tune.hpMul;
@@ -1007,6 +1015,22 @@ export class Game {
     this.grenadeMeshes.splice(i, 1);
   }
 
+  /** Exploders: lit ones count down (killed ones pop after a short delay), then blow up. */
+  private updateExploders(dt: number): void {
+    for (const zb of this.zombies.zombies) {
+      if (zb.kind !== 'exploder' || zb.exploded) continue;
+      if (!zb.alive && zb.fuse === undefined) zb.fuse = zb.fuseTotal = EXPLODER.deathFuse;
+      if (zb.fuse === undefined) continue;
+      if (zb.fuse === zb.fuseTotal) this.sfx.hiss();
+      zb.fuse -= dt;
+      if (zb.fuse > 0) continue;
+      zb.exploded = true;
+      const t = zb.parts[1].body.translation();
+      this.stats.exploderBlasts++;
+      this.explode(t.x, Math.max(0.3, t.y), t.z, EXPLODER.radius);
+    }
+  }
+
   addBarrel(x: number, z: number, explosive: boolean): DynamicProp {
     const prop = spawnBarrel(this.renderer.scene, this.physics, x, z, explosive);
     this.props.push(prop);
@@ -1044,7 +1068,7 @@ export class Game {
       zombiesAlive: this.zombies.aliveCount, ragdolls: this.zombies.ragdollCount, severed: this.zombies.severedCount,
       zombieHits: this.stats.zombieHits, kills: this.stats.kills, dismembers: this.stats.dismembers,
       damageTaken: this.stats.damageTaken, playerAlive: this.player.alive, wave: this.waves.wave, waveState: this.waves.state,
-      grenades: p.grenades, unlocked: p.unlocked, grenadesLive: this.grenades.length, grenadesThrown: this.stats.grenadesThrown,
+      grenades: p.grenades, unlocked: p.unlocked, exploderBlasts: this.stats.exploderBlasts, grenadesLive: this.grenades.length, grenadesThrown: this.stats.grenadesThrown,
       grenadeBlasts: this.stats.grenadeBlasts, grenadeMode: this.grenadeMode, arcVisible: this.arcDots.visible,
       barrels: this.stats.barrels, explosiveBarrels: this.props.filter((q) => q.explosive).length,
       reserve: p.weapon.reserve, pickups: this.pickups.list.map((q) => q.kind), smgReserve: p.weapons[1].reserve, crawlers: this.zombies.zombies.filter((z) => z.crawler && z.alive).length,
