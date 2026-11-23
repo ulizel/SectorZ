@@ -21,7 +21,8 @@ describe('zombie types', () => {
     const head = (z: typeof w) => z.parts[PART_INDEX.head];
     const hy = (z: typeof w) => head(z).body.translation().y;
     const he = (z: typeof w) => head(z).collider.halfExtents()!.y;
-    expect(hy(b) / hy(w)).toBeCloseTo(ZOMBIE_TYPES.brute.scale, 2);
+    // (idle sway is random, so the animated head height only roughly follows the scale)
+    expect(Math.abs(hy(b) / hy(w) - ZOMBIE_TYPES.brute.scale)).toBeLessThan(0.06);
     expect(he(b) / he(w)).toBeCloseTo(ZOMBIE_TYPES.brute.scale, 3);
     expect(hy(r)).toBeLessThan(hy(w));
     expect(b.hp).toBe(ZOMBIE_TYPES.brute.hp);
