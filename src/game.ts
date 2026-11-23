@@ -13,6 +13,8 @@ import type { Zombie } from './entities/zombie';
 import { ZombieRenderer } from './render/zombieRenderer';
 import { ZombieAI, AI as AI_CFG, type AttackResult } from './ai/zombieAI';
 import { ARENA } from './config';
+import { WaveDirector, type WaveEvent } from './systems/waves';
+import { Pickups, LOOT, type PickupKind } from './systems/pickups';
 import { Group, groups, ALL, PhysicsWorld, MATERIAL_COST } from './physics/physicsWorld';
 import { Renderer } from './render/renderer';
 import { HumanoidRig, SURVIVOR_LOOK } from './render/humanoidRig';
@@ -30,6 +32,12 @@ const BULLET_HEIGHT = 1.15;
 const AIM_LINE_LENGTH = 6;
 const v3 = new THREE.Vector3();
 const v3b = new THREE.Vector3();
+
+const BEST_KEY = 'sectorz.best';
+function loadBest(): { wave: number; kills: number } {
+  try { return { wave: 0, kills: 0, ...JSON.parse(localStorage.getItem(BEST_KEY) ?? '{}') }; } catch { return { wave: 0, kills: 0 }; }
+}
+function saveBest(b: { wave: number; kills: number }): void { try { localStorage.setItem(BEST_KEY, JSON.stringify(b)); } catch { /* ignore */ } }
 
 export class Game {
   readonly events = new EventBus();
@@ -69,7 +77,7 @@ export class Game {
   private visYaw = 0;
   private time = 0;
   private readonly weaponEvents: WeaponEvent[] = [];
-  readonly stats = { shots: 0, hits: 0, ticks: 0, maxImpactSpeed: 0, penetrations: 0, activeReloads: 0, zombieHits: 0, kills: 0, dismembers: 0, damageTaken: 0 };
+  readonly stats = { shots: 0, hits: 0, ticks: 0, maxImpactSpeed: 0, penetrations: 0, activeReloads: 0, zombieHits: 0, kills: 0, dismembers: 0, damageTaken: 0, wave: 0 };
   private readonly penSkip = new Set<number>();
   private readonly holes: BulletHoles;
   private readonly blood: BulletHoles;
@@ -85,7 +93,9 @@ export class Game {
   private readonly attacks: AttackResult[] = [];
   /** Survival mode (PLAY): keep a trickle of hunting zombies coming. Off in the Lab / tests. */
   survival = true;
-  private spawnT = 0;
+  readonly waves = new WaveDirector();
+  private readonly waveEvents: WaveEvent[] = [];
+  pickups!: Pickups;
   private hurtT = 0;
   private readonly hurtEl = document.getElementById('hurt')!;
   private readonly deadEl = document.getElementById('dead')!;
@@ -104,6 +114,7 @@ export class Game {
     this.ai = new ZombieAI(this.physics, ARENA.size);
     this.ai.props = this.props;
     this.zombieRenderer = new ZombieRenderer(scene);
+    this.pickups = new Pickups(scene);
     void ({} as Zombie);
     this.propStart = this.props.map((p) => { const t = p.body.translation(); return new THREE.Vector3(t.x, t.y, t.z); });
     this.player = new Player(1, this.physics, 0, 2);
@@ -228,8 +239,15 @@ export class Game {
     const p0 = this.player;
     this.ai.update(dt, { x: p0.x, z: p0.z, alive: p0.alive }, this.zombies.zombies, this.attacks);
     for (const a of this.attacks) this.damagePlayer(a.damage, a.zombie.x, a.zombie.z);
-    if (this.survival && !this.lab) this.survivalSpawns(dt);
+    if (this.survival && !this.lab) this.runWaves(dt);
     this.zombies.update(dt);
+    // Every death (bullets, blasts, impacts) is counted once here: kills + loot.
+    for (const z of this.zombies.newlyDead) {
+      this.stats.kills++;
+      const t = z.parts[0].body.translation();
+      if (!this.lab) this.pickups.roll(t.x, t.z);
+    }
+    this.pickups.update(dt, this.player.x, this.player.z, this.player.alive, (k) => this.takePickup(k));
     this.aim.updateBloom(def, Math.min(1, this.player.speed / PLAYER.moveSpeed), dt);
     this.player.weapon.update(dt, cmd.trigger, cmd.triggerTap, cmd.reload, this.weaponEvents);
     for (const e of this.weaponEvents) {
@@ -293,7 +311,7 @@ export class Game {
             this.stats.dismembers++;
             this.events.emit('dismember', { x: sp.x, y: sp.y, z: sp.z, dx, dz });
           }
-          if (zr.killed) { this.stats.kills++; this.events.emit('zombieKilled', { x: ex, y: ey, z: ez }); }
+          if (zr.killed) this.events.emit('zombieKilled', { x: ex, y: ey, z: ez });
         } else if (dynamic) {
           this.stats.hits++;
           body!.applyImpulseAtPoint({ x: dx * force, y: force * 0.15, z: dz * force }, hit.point, true);
@@ -516,6 +534,7 @@ export class Game {
     this.renderer.render();
 
     this.hud.update(p.weapon, p.health, PLAYER.maxHealth);
+    if (this.survival && !this.lab) this.hud.wave(this.waves.state, this.waves.wave, this.waves.remaining(this.zombies.aliveCount), this.waves.timer);
     this.debug.update(frameDt, this.renderer.renderer, {
       physicsMs: this.physics.lastStepMs,
       ragdolls: this.zombies.ragdollCount,
@@ -560,7 +579,15 @@ export class Game {
   }
 
   private showDeath(): void {
-    this.deadEl.querySelector('.kills')!.textContent = `${this.stats.kills} kills`;
+    // Run summary + best run on this device.
+    const wave = this.lab ? 0 : Math.max(this.waves.wave, 1);
+    const best = loadBest();
+    const isBest = !this.lab && (wave > best.wave || (wave === best.wave && this.stats.kills > best.kills));
+    if (isBest) saveBest({ wave, kills: this.stats.kills });
+    const b = isBest ? { wave, kills: this.stats.kills } : best;
+    this.deadEl.querySelector('.kills')!.innerHTML = (this.lab ? '' : `WAVE ${wave}<br>`) +
+      `${this.stats.kills} kills · ${this.stats.dismembers} limbs<br>` +
+      (this.lab ? '' : isBest ? '<b class="best">NEW BEST!</b>' : `best: wave ${b.wave} · ${b.kills} kills`);
     this.deadEl.classList.add('on');
     this.sfx.playerDeath();
   }
@@ -573,28 +600,55 @@ export class Game {
     p.body.setNextKinematicTranslation({ x: 0, y: p.body.translation().y, z: 2 });
     p.x = p.prevX = 0; p.z = p.prevZ = 2; p.vx = p.vz = 0;
     for (const w of p.weapons) { w.ammo = w.def.magSize; w.cancelReload(); }
-    this.stats.kills = 0;
+    for (const w of p.weapons) w.reserve = w.def.reserveStart;
+    this.stats.kills = 0; this.stats.dismembers = 0; this.stats.wave = 0;
     this.deathShown = false;
     this.deadEl.classList.remove('on');
-    this.spawnT = 1.5;
+    this.waves.reset();
+    this.pickups.clear();
     if (this.lab) this.spawnZombies(5);
   }
 
-  /** Survival (PLAY mode): keep up to N hunting zombies coming from out of sight. */
-  private survivalSpawns(dt: number): void {
-    this.spawnT -= dt;
-    if (this.spawnT > 0 || !this.player.alive) return;
-    this.spawnT = 2.2;
+  /** Survival (PLAY mode): waves of hunting zombies from out of sight, with breathers between. */
+  private runWaves(dt: number): void {
+    if (!this.player.alive) return;
     const max = this.quality.name === 'mobile' ? 8 : 12;
-    if (this.zombies.aliveCount >= max) return;
-    const p = this.player;
-    for (let tries = 0; tries < 20; tries++) {
+    const n = this.waves.update(dt, this.zombies.aliveCount, max, this.waveEvents);
+    for (const e of this.waveEvents) {
+      if (e.type === 'waveStart') { this.hud.banner(`WAVE ${e.wave}`, `${e.count} zombies`); this.sfx.waveStart(); }
+      else { this.hud.banner(`WAVE ${e.wave} CLEARED`, 'catch your breath'); this.sfx.waveClear(); this.stats.wave = e.wave; }
+    }
+    for (let i = 0; i < n; i++) this.spawnWaveZombie();
+  }
+
+  private spawnWaveZombie(): void {
+    const p = this.player, tune = this.waves.tuning;
+    for (let tries = 0; tries < 30; tries++) {
       const x = (Math.random() - 0.5) * (ARENA.size - 4), z = (Math.random() - 0.5) * (ARENA.size - 4);
       if (Math.hypot(x - p.x, z - p.z) < 12 || this.ai.nav.isBlocked(x, z)) continue;
       const zb = this.zombies.spawn(x, z, Math.atan2(p.x - x, p.z - z));
+      zb.baseSpeed *= tune.speedMul;
+      zb.hp *= tune.hpMul;
       this.ai.alertAll([zb]);
       return;
     }
+  }
+
+  /** Walked over loot. Returns false if it's of no use right now (stays on the ground). */
+  private takePickup(k: PickupKind): boolean {
+    const p = this.player;
+    if (k === 'health') {
+      if (p.health >= PLAYER.maxHealth) return false;
+      p.health = Math.min(PLAYER.maxHealth, p.health + LOOT.healthAmount);
+      this.hud.toast(`+${LOOT.healthAmount} HEALTH`);
+    } else {
+      const smg = p.weapons[1];
+      const got = smg.addAmmo(LOOT.ammoAmount);
+      if (got <= 0) return false;
+      this.hud.toast(`+${got} SMG AMMO`);
+    }
+    this.sfx.pickup();
+    return true;
   }
 
   /** Spawn a ring of test zombies in front of the player (Ragdoll Lab). */
@@ -618,10 +672,8 @@ export class Game {
 
   explode(x: number, y: number, z: number, radius = 5): void {
     const dt = SIM_DT;
-    const before = this.zombies.deadCount;
     const torn = this.zombies.explode(x, y, z, radius, 160, 45, dt);
     this.stats.dismembers += torn;
-    this.stats.kills += Math.max(0, this.zombies.deadCount - before);
     for (const prop of this.props) {
       const t = prop.body.translation();
       let dx = t.x - x, dz = t.z - z;
@@ -653,7 +705,8 @@ export class Game {
       activeReloads: this.stats.activeReloads, steady: this.aim.steady,
       zombiesAlive: this.zombies.aliveCount, ragdolls: this.zombies.ragdollCount, severed: this.zombies.severedCount,
       zombieHits: this.stats.zombieHits, kills: this.stats.kills, dismembers: this.stats.dismembers,
-      damageTaken: this.stats.damageTaken, playerAlive: this.player.alive, crawlers: this.zombies.zombies.filter((z) => z.crawler && z.alive).length,
+      damageTaken: this.stats.damageTaken, playerAlive: this.player.alive, wave: this.waves.wave, waveState: this.waves.state,
+      reserve: p.weapon.reserve, pickups: this.pickups.list.map((q) => q.kind), smgReserve: p.weapons[1].reserve, crawlers: this.zombies.zombies.filter((z) => z.crawler && z.alive).length,
       fps: this.debug.fps, physicsMs: this.debug.avgPhysicsMs,
       bodies: this.physics.bodyCount,
     };

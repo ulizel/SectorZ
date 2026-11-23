@@ -124,7 +124,9 @@ export class Zombie {
   /** Attack pose: 0 = none, 0..1 wind-up, 1..2 strike/recover. */
   attackPose = 0;
   /** Base walking speed (m/s) for this individual. */
-  readonly baseSpeed = 1.15 + Math.random() * 0.45;
+  baseSpeed = 1.15 + Math.random() * 0.45;
+  /** Death already counted (kills, loot). */
+  counted = false;
   /** Last transforms of each part (kept after physics removal so the renderer can sink it away). */
   finalTransforms: { p: THREE.Vector3; q: THREE.Quaternion }[] | null = null;
   /** AI blackboard (owned by the AI system). */

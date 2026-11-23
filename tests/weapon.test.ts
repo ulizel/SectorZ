@@ -111,3 +111,25 @@ describe('active reload', () => {
     expect(press(w)).not.toContain('activeReload');
   });
 });
+
+describe('reserve ammo', () => {
+  it('reloading draws from reserve; empty reserve = no reload, dry clicks', () => {
+    const w = new WeaponState(WEAPONS.smg);
+    w.reserve = 10;
+    w.ammo = 0;
+    run(w, DT, true); // pulling the trigger on empty triggers the auto-reload
+    run(w, WEAPONS.smg.reloadTime + 0.1, false);
+    expect(w.ammo).toBe(10);
+    expect(w.reserve).toBe(0);
+    const ev = run(w, 2, true);
+    expect(ev.filter((e) => e === 'fired').length).toBe(10);
+    expect(w.ammo).toBe(0);
+    expect(w.reloading).toBe(false);
+    expect(ev).toContain('dry');
+  });
+  it('pickups add reserve up to the max; pistol is unlimited', () => {
+    const w = new WeaponState(WEAPONS.smg);
+    expect(w.addAmmo(1000)).toBe(WEAPONS.smg.reserveMax - WEAPONS.smg.reserveStart);
+    expect(new WeaponState(WEAPONS.pistol).reserve).toBe(Infinity);
+  });
+});

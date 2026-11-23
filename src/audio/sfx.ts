@@ -89,6 +89,9 @@ export class Sfx {
   }
   playerHurt(): void { this.burst(0.15, 700, 1, 0.5); this.tone(160, 90, 0.18, 0.35, 'sawtooth'); }
   playerDeath(): void { this.tone(220, 40, 1.2, 0.5, 'sawtooth'); this.burst(0.8, 300, 0.7, 0.5); }
+  pickup(): void { this.tone(660, 990, 0.08, 0.2, 'square'); this.tone(990, 1320, 0.1, 0.18, 'square', 0.08); }
+  waveStart(): void { this.tone(110, 90, 0.9, 0.5, 'sawtooth'); this.tone(165, 120, 0.9, 0.3, 'sawtooth', 0.1); this.burst(0.6, 300, 0.7, 0.3); }
+  waveClear(): void { [523, 659, 784].forEach((f, i) => this.tone(f, f, 0.18, 0.18, 'triangle', i * 0.12)); }
   dismember(): void { this.burst(0.18, 600, 1, 0.6); this.tone(80, 40, 0.2, 0.5); this.burst(0.25, 1800, 0.8, 0.25, 'lowpass', 0.05); }
   explosion(): void {
     this.burst(0.9, 600, 0.5, 1.2);

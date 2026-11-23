@@ -26,6 +26,9 @@ export interface WeaponDef {
   activeWindow: [number, number];
   /** Play the falling-shell tink after each shot. */
   casingSound: boolean;
+  /** Reserve ammo at start / maximum carried (Infinity = unlimited, the pistol fallback). */
+  reserveStart: number;
+  reserveMax: number;
 }
 
 export const WEAPONS: Record<string, WeaponDef> = {
@@ -33,14 +36,14 @@ export const WEAPONS: Record<string, WeaponDef> = {
     id: 'pistol', name: 'Pistol', damage: 25, fireInterval: 0.2, magSize: 12, reloadTime: 1.1,
     spread: 0.012, range: 40, impulse: 10, pellets: 1, automatic: false, shake: 0.2, recoil: 1,
     aimTurn: 9, settle: 3.5, recoilBloom: 1.2, aimKick: 0,
-    recoilPattern: [0], penetration: 0.7, pushback: 0.9, activeWindow: [0.45, 0.62], casingSound: false,
+    recoilPattern: [0], penetration: 0.7, pushback: 0.9, activeWindow: [0.45, 0.62], casingSound: false, reserveStart: Infinity, reserveMax: Infinity,
   },
   smg: {
     id: 'smg', name: 'SMG', damage: 14, fireInterval: 0.085, magSize: 30, reloadTime: 1.6,
     spread: 0.03, range: 32, impulse: 6, pellets: 1, automatic: true, shake: 0.1, recoil: 0.55,
     aimTurn: 6, settle: 2.5, recoilBloom: 0.35, aimKick: 0.006,
     recoilPattern: [0.012, 0.016, 0.014, 0.008, -0.004, -0.014, -0.018, -0.012, 0.002, 0.014, 0.018, 0.01],
-    penetration: 0.45, pushback: 0.35, activeWindow: [0.5, 0.64], casingSound: false,
+    penetration: 0.45, pushback: 0.35, activeWindow: [0.5, 0.64], casingSound: false, reserveStart: 60, reserveMax: 180,
   },
 };
 
@@ -51,6 +54,8 @@ const TAP_BUFFER = 0.15;
 
 export class WeaponState {
   ammo: number;
+  /** Rounds carried outside the magazine. */
+  reserve: number;
   cooldown = 0;
   reloadLeft = 0;
   private tapBuffer = 0;
@@ -63,6 +68,23 @@ export class WeaponState {
 
   constructor(readonly def: WeaponDef) {
     this.ammo = def.magSize;
+    this.reserve = def.reserveStart;
+  }
+
+  /** Add reserve ammo (pickups). Returns how much was actually taken. */
+  addAmmo(n: number): number {
+    const take = Math.max(0, Math.min(n, this.def.reserveMax - this.reserve));
+    this.reserve += take;
+    return take;
+  }
+
+  get canReload(): boolean { return this.reserve > 0 && this.ammo < this.def.magSize; }
+
+  /** Move rounds from reserve into the magazine. */
+  private refill(): void {
+    const take = Math.min(this.def.magSize - this.ammo, this.reserve);
+    this.ammo += take;
+    this.reserve -= take;
   }
 
   get reloading(): boolean { return this.reloadLeft > 0; }
@@ -90,11 +112,11 @@ export class WeaponState {
       this.reloadLeft -= dt;
       if (this.reloadLeft <= 0) {
         this.reloadLeft = 0;
-        this.ammo = this.def.magSize;
+        this.refill();
         out.push('reloadEnd');
       }
       else if (reloadRequest && !this.activeTried) this.tryActiveReload(out);
-    } else if (reloadRequest && this.ammo < this.def.magSize) {
+    } else if (reloadRequest && this.canReload) {
       this.startReload(out);
     }
 
@@ -108,7 +130,7 @@ export class WeaponState {
 
     if (this.ammo <= 0) {
       if (this.dryCooldown === 0) { out.push('dry'); this.dryCooldown = 0.3; }
-      this.startReload(out); // auto-reload on empty
+      if (this.reserve > 0) this.startReload(out); // auto-reload on empty (if there's ammo left)
       return;
     }
     this.ammo--;
@@ -116,7 +138,7 @@ export class WeaponState {
     this.burst++;
     this.sinceShot = 0;
     out.push('fired');
-    if (this.ammo === 0) this.startReload(out);
+    if (this.ammo === 0 && this.reserve > 0) this.startReload(out);
   }
 
   private startReload(out: WeaponEvent[]): void {
@@ -133,7 +155,7 @@ export class WeaponState {
     const [a, b] = this.def.activeWindow;
     if (p >= a && p <= b) {
       this.reloadLeft = 0;
-      this.ammo = this.def.magSize;
+      this.refill();
       out.push('activeReload', 'reloadEnd');
     } else {
       this.reloadLeft += 0.5;

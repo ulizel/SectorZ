@@ -32,6 +32,8 @@ export class ZombieManager {
   /** Zombies removed this tick (so views can be disposed). */
   readonly removed: Zombie[] = [];
   readonly spawned: Zombie[] = [];
+  /** Zombies that died since the last update (each reported exactly once: kills, loot). */
+  readonly newlyDead: Zombie[] = [];
 
   constructor(private readonly physics: PhysicsWorld, readonly caps: RagdollCaps) {}
 
@@ -46,7 +48,9 @@ export class ZombieManager {
   lookup(collider: RAPIER.Collider) { return this.byCollider.get(collider.handle); }
 
   update(dt: number): void {
+    this.newlyDead.length = 0;
     for (const z of this.zombies) {
+      if (!z.alive && !z.counted) { z.counted = true; this.newlyDead.push(z); }
       z.update(dt);
       // Freeze settled corpses; anything still twitching after 6 s is frozen anyway.
       if (z.state === 'dead' && !z.frozen && (z.restTime > 0.8 || z.deadTime > 6)) z.freeze();

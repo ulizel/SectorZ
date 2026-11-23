@@ -348,6 +348,38 @@ async function ragdollLab(browser) {
   await page.close();
 }
 
+async function survival(browser) {
+  console.log('\n[Survival waves, desktop]');
+  const page = await browser.newPage({ viewport: { width: 1000, height: 640 } });
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await throttle(page);
+  await page.goto(`${BASE}?quality=desktop&autostart`);
+  await waitReady(page);
+  await page.waitForFunction(() => window.__SECTORZ__.state().waveState === 'active', null, { timeout: 60000 });
+  check('wave 1 starts with a banner', (await state(page)).wave === 1 && await page.evaluate(() => document.getElementById('banner').classList.contains('on')));
+  await ticks(page, 240);
+  check('wave zombies spawn', (await state(page)).zombiesAlive > 0, `alive=${(await state(page)).zombiesAlive}`);
+  // Kill everything as it spawns until the wave is cleared.
+  for (let i = 0; i < 40 && (await state(page)).waveState === 'active'; i++) {
+    await page.evaluate(() => { for (const z of window.__SECTORZ__.game.zombies.zombies) if (z.alive) z.kill(1 / 60); });
+    await ticks(page, 60);
+  }
+  const a = await state(page);
+  check('killing the whole wave clears it (break before wave 2)', a.waveState === 'break' && a.wave === 1 && a.kills >= 6, `state=${a.waveState} kills=${a.kills}`);
+  // Loot: drop an ammo box at the player's feet → collected into SMG reserve.
+  const before = a.smgReserve;
+  await page.evaluate(() => { const g = window.__SECTORZ__.game; g.pickups.spawn('ammo', g.player.x + 0.3, g.player.z); });
+  await ticks(page, 10);
+  check('walking over ammo adds SMG reserve', (await state(page)).smgReserve > before, `${before} → ${(await state(page)).smgReserve}`);
+  await page.evaluate(() => { window.__SECTORZ__.game.player.health = 0; });
+  await ticks(page, 10);
+  const deadText = await page.evaluate(() => document.querySelector('#dead .kills').textContent);
+  check('death screen shows the run summary', /WAVE 1/.test(deadText) && /kills/.test(deadText), deadText);
+  check('no JS errors (survival)', errors.length === 0, errors.join(' | '));
+  await page.close();
+}
+
 try {
   await waitForServer();
   const browser = await chromium.launch(launchArgs);
@@ -355,6 +387,7 @@ try {
   const only = process.env.SMOKE_ONLY;
   if (!only || only === 'desktop') await desktop(browser);
   if (!only || only === 'lab') await ragdollLab(browser);
+  if (!only || only === 'survival') await survival(browser);
   if (!only || only === 'phone') { await phone(browser, 'iPhone 13', false); await phone(browser, 'Pixel 7', true); }
   await browser.close();
 } catch (e) {
