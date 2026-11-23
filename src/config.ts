@@ -23,6 +23,9 @@ export const CAMERA = {
   shakeDecay: 9,
 };
 
+/** Touch aim: the aim direction turns toward the thumb at this rate instead of snapping. */
+export const AIM = { turnSpeed: 5 }; // rad/s (~290°/s; a 180° turn takes ~0.6 s)
+
 export const ARENA = { size: 44, wallHeight: 1.6 };
 
 /** Prop physics. Masses are "game-real": light enough that bullets visibly shove them. */

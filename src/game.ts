@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { PLAYER } from './config';
+import { PLAYER, AIM } from './config';
 import { EventBus } from './core/events';
 import { FixedLoop } from './core/loop';
 import { lerp, angleDelta } from './core/math';
@@ -48,6 +48,7 @@ export class Game {
   private cmd: InputCommand = emptyCommand();
   private aimX = 0; private aimZ = 1;
   private aiming = false;
+  private stickAim = false;
   private recoil = 0;
   private visYaw = 0;
   private time = 0;
@@ -113,6 +114,7 @@ export class Game {
     out.aimX = out.aimZ = 0;
     out.aiming = out.trigger = out.triggerTap = false;
     const automatic = this.player.weapon.def.automatic;
+    this.stickAim = !!raw.aimStick;
     if (raw.aimStick) {
       // Touch aim stick: exact stick direction. Auto weapons fire while aiming;
       // single-shot weapons fire once when the thumb lifts while aiming.
@@ -137,11 +139,15 @@ export class Game {
     this.stats.ticks++;
     this.resolveCommand(this.input.sample(), this.cmd);
     const cmd = this.cmd;
-    if (cmd.aimX !== 0 || cmd.aimZ !== 0) { this.aimX = cmd.aimX; this.aimZ = cmd.aimZ; }
-    else if (cmd.moveX !== 0 || cmd.moveZ !== 0) {
-      const l = Math.hypot(cmd.moveX, cmd.moveZ);
-      this.aimX = cmd.moveX / l; this.aimZ = cmd.moveZ / l;
-    }
+    if (this.stickAim) {
+      // Touch aim turns from the remembered aim toward the thumb at a limited rate (no snapping).
+      const cur = Math.atan2(this.aimX, this.aimZ);
+      const d = angleDelta(cur, Math.atan2(cmd.aimX, cmd.aimZ));
+      const maxStep = AIM.turnSpeed * dt;
+      const a = cur + Math.max(-maxStep, Math.min(maxStep, d));
+      this.aimX = cmd.aimX = Math.sin(a);
+      this.aimZ = cmd.aimZ = Math.cos(a);
+    } else if (cmd.aimX !== 0 || cmd.aimZ !== 0) { this.aimX = cmd.aimX; this.aimZ = cmd.aimZ; }
 
     this.aiming = cmd.aiming;
     if (cmd.switchWeapon !== null) this.player.switchWeapon(cmd.switchWeapon);
