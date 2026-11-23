@@ -37,22 +37,26 @@ export class Game {
   private readonly tracers: Tracers;
   private readonly flash: MuzzleFlash;
   private readonly hud = new Hud();
-  private readonly laser: THREE.Mesh;
+  private readonly aimLine: THREE.Mesh;
+  private readonly reticle: THREE.Group;
   private readonly marker: THREE.Mesh;
+  /** Whether the aim line is currently shown (exposed to tests). */
+  aimLineVisible = false;
   readonly debug = new DebugOverlay();
   readonly loop: FixedLoop;
 
   private cmd: InputCommand = emptyCommand();
   private aimX = 0; private aimZ = 1;
+  private aiming = false;
   private recoil = 0;
   private visYaw = 0;
   private time = 0;
   private readonly weaponEvents: WeaponEvent[] = [];
   readonly stats = { shots: 0, hits: 0, ticks: 0, maxImpactSpeed: 0 };
 
-  constructor(container: HTMLElement, touchLayer: HTMLElement, reloadBtn: HTMLElement, readonly quality: QualityPreset) {
+  constructor(container: HTMLElement, touchLayer: HTMLElement, reloadBtn: HTMLElement, switchBtn: HTMLElement, readonly quality: QualityPreset) {
     this.renderer = new Renderer(container, quality);
-    this.input = new InputManager(touchLayer, touchLayer, reloadBtn);
+    this.input = new InputManager(touchLayer, reloadBtn, switchBtn);
     const scene = this.renderer.scene;
 
     this.props = buildArena(scene, this.physics);
@@ -66,14 +70,26 @@ export class Game {
     this.flash = new MuzzleFlash(scene);
     scene.add(this.sparks.mesh, this.debris.mesh);
 
-    // Faint laser sight (helps aiming with a thumb) and a ground ring so the player pops.
-    this.laser = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1).translate(0, 0, 0.5),
-      new THREE.MeshBasicMaterial({ color: 0xff4630, transparent: true, opacity: 0.35, depthWrite: false, toneMapped: false }));
-    this.laser.scale.set(0.02, 0.02, 1);
+    // Aim line + reticle. Touch: shown only while the aim stick is past its deadzone.
+    // Mouse: always shown (the cursor is always aiming).
+    this.aimLine = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1).translate(0, 0, 0.5),
+      new THREE.MeshBasicMaterial({ color: 0xff5a3c, transparent: true, opacity: 0.55, depthWrite: false, toneMapped: false }));
+    this.aimLine.scale.set(0.035, 0.012, 1);
+    this.aimLine.visible = false;
+    this.reticle = new THREE.Group();
+    const retMat = new THREE.MeshBasicMaterial({ color: 0xff5a3c, transparent: true, opacity: 0.9, depthWrite: false, toneMapped: false, side: THREE.DoubleSide });
+    this.reticle.add(new THREE.Mesh(new THREE.RingGeometry(0.2, 0.26, 20).rotateX(-Math.PI / 2), retMat));
+    for (let i = 0; i < 4; i++) {
+      const tick = new THREE.Mesh(new THREE.PlaneGeometry(0.05, 0.14).rotateX(-Math.PI / 2).translate(0, 0, 0.33), retMat);
+      tick.rotation.y = (i * Math.PI) / 2;
+      this.reticle.add(tick);
+    }
+    this.reticle.visible = false;
+    scene.add(this.reticle);
     this.marker = new THREE.Mesh(new THREE.RingGeometry(0.42, 0.52, 24).rotateX(-Math.PI / 2),
       new THREE.MeshBasicMaterial({ color: 0x8fe0ff, transparent: true, opacity: 0.45, depthWrite: false }));
     this.marker.position.y = 0.02;
-    scene.add(this.laser, this.marker);
+    scene.add(this.aimLine, this.marker);
 
     this.wireEffects();
     this.renderer.snapCamera(this.player.x, this.player.z);
@@ -95,16 +111,26 @@ export class Game {
     out.moveX = raw.moveX;
     out.moveZ = raw.moveY;
     out.aimX = out.aimZ = 0;
+    out.aiming = out.trigger = out.triggerTap = false;
+    const automatic = this.player.weapon.def.automatic;
     if (raw.aimStick) {
+      // Touch aim stick: exact stick direction. Auto weapons fire while aiming;
+      // single-shot weapons fire once when the thumb lifts while aiming.
       out.aimX = raw.aimStick.x; out.aimZ = raw.aimStick.y;
+      out.aiming = raw.stickAiming;
+      out.trigger = automatic && raw.stickAiming;
+      out.triggerTap = !automatic && raw.stickReleased;
     } else if (raw.aimScreen && this.renderer.screenToGround(raw.aimScreen.x, raw.aimScreen.y, BULLET_HEIGHT, v3)) {
       const dx = v3.x - this.player.x, dz = v3.z - this.player.z;
       const d = Math.hypot(dx, dz);
       if (d > 0.4) { out.aimX = dx / d; out.aimZ = dz / d; }
       else { out.aimX = this.aimX; out.aimZ = this.aimZ; }
+      out.aiming = true;
+      out.trigger = raw.mouseHeld;
+      out.triggerTap = raw.mousePressed;
     }
-    out.fire = raw.fire;
     out.reload = raw.reload;
+    out.switchWeapon = raw.switchWeapon;
   }
 
   private step(dt: number): void {
@@ -117,8 +143,10 @@ export class Game {
       this.aimX = cmd.moveX / l; this.aimZ = cmd.moveZ / l;
     }
 
+    this.aiming = cmd.aiming;
+    if (cmd.switchWeapon !== null) this.player.switchWeapon(cmd.switchWeapon);
     this.player.update(cmd, dt);
-    this.player.weapon.update(dt, cmd.fire, cmd.reload, this.weaponEvents);
+    this.player.weapon.update(dt, cmd.trigger, cmd.triggerTap, cmd.reload, this.weaponEvents);
     for (const e of this.weaponEvents) {
       const w = this.player.weapon.def.id;
       if (e === 'fired') this.fire();
@@ -156,17 +184,25 @@ export class Game {
 
   // ───────────────────────────── presentation ─────────────────────────────
 
-  private updateLaser(): void {
-    this.rig.root.updateMatrixWorld(true);
-    this.rig.muzzle.getWorldPosition(v3);
-    v3.y = BULLET_HEIGHT; // laser shows the true bullet path
-    const dx = Math.sin(this.visYaw), dz = Math.cos(this.visYaw);
-    const hit = this.physics.raycast(v3.x, v3.y, v3.z, dx, 0, dz, 25,
+  /** Aim line from the player along the exact aim direction, ending in a reticle at the first obstacle. */
+  private updateAimLine(px: number, pz: number): void {
+    const show = this.aiming;
+    this.aimLineVisible = show;
+    this.aimLine.visible = this.reticle.visible = show;
+    if (!show) return;
+    const dx = this.aimX, dz = this.aimZ;
+    const ox = px + dx * 0.45, oz = pz + dz * 0.45;
+    const maxLen = Math.min(14, this.player.weapon.def.range);
+    const hit = this.physics.raycast(ox, BULLET_HEIGHT, oz, dx, 0, dz, maxLen,
       groups(Group.PLAYER, ALL & ~Group.PLAYER & ~Group.DEBRIS), this.player.collider);
-    const len = hit ? hit.toi : 25;
-    this.laser.position.copy(v3);
-    this.laser.rotation.set(0, this.visYaw, 0);
-    this.laser.scale.z = len;
+    const len = hit ? hit.toi : maxLen;
+    this.aimLine.position.set(ox, BULLET_HEIGHT, oz);
+    this.aimLine.rotation.set(0, Math.atan2(dx, dz), 0);
+    this.aimLine.scale.z = len;
+    this.reticle.position.set(ox + dx * len, BULLET_HEIGHT + 0.02, oz + dz * len);
+    this.reticle.rotation.y += 0.04;
+    const s = 1 + 0.15 * Math.sin(this.time * 10);
+    this.reticle.scale.set(s, s, s);
   }
 
   private wireEffects(): void {
@@ -221,7 +257,7 @@ export class Game {
     this.rig.pose(p.walkPhase, moveAmt, strafe, this.recoil, this.time);
 
     this.marker.position.x = x; this.marker.position.z = z;
-    this.updateLaser();
+    this.updateAimLine(x, z);
 
     for (const prop of this.props) {
       const t = prop.body.translation(), r = prop.body.rotation();
@@ -256,7 +292,8 @@ export class Game {
     });
     return {
       x: p.x, z: p.z, yaw: p.yaw, health: p.health,
-      ammo: p.weapon.ammo, reloading: p.weapon.reloading,
+      ammo: p.weapon.ammo, reloading: p.weapon.reloading, weapon: p.weapon.def.id,
+      aimLineVisible: this.aimLineVisible, aimX: this.aimX, aimZ: this.aimZ,
       shots: this.stats.shots, propHits: this.stats.hits, ticks: this.stats.ticks,
       maxPropMove, maxImpactSpeed: this.stats.maxImpactSpeed,
       fps: this.debug.fps, physicsMs: this.debug.avgPhysicsMs,

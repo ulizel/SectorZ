@@ -2,43 +2,87 @@ import { describe, it, expect } from 'vitest';
 import { WeaponState, WEAPONS, type WeaponEvent } from '../src/weapons/weapon';
 
 const DT = 1 / 60;
-function run(w: WeaponState, seconds: number, trigger: boolean, out: WeaponEvent[][] = []) {
+/** Run for `seconds` with the given trigger state; returns all events. */
+function run(w: WeaponState, seconds: number, trigger: boolean, tap = false) {
   const ev: WeaponEvent[] = [];
-  for (let t = 0; t < seconds; t += DT) { w.update(DT, trigger, false, ev); out.push([...ev]); }
-  return out.flat();
+  const all: WeaponEvent[] = [];
+  const n = Math.round(seconds / DT);
+  for (let i = 0; i < n; i++) { w.update(DT, trigger, tap && i === 0, false, ev); all.push(...ev); }
+  return all;
 }
+const shots = (ev: WeaponEvent[]) => ev.filter((e) => e === 'fired').length;
 
-describe('WeaponState (pistol)', () => {
-  it('fires at the configured rate while held', () => {
-    const w = new WeaponState(WEAPONS.pistol);
-    const ev = run(w, 1.0, true);
-    const shots = ev.filter((e) => e === 'fired').length;
-    // 0.2s interval → 5 shots in 1s (first shot immediate).
-    expect(shots).toBeGreaterThanOrEqual(5);
-    expect(shots).toBeLessThanOrEqual(6);
-    expect(w.ammo).toBe(WEAPONS.pistol.magSize - shots);
-  });
+describe('single-shot weapon (pistol)', () => {
+  it('is single-shot', () => expect(WEAPONS.pistol.automatic).toBe(false));
 
-  it('auto-reloads when the magazine empties and refills', () => {
+  it('holding the trigger alone never fires (touch: aiming shows the line only)', () => {
     const w = new WeaponState(WEAPONS.pistol);
-    const ev = run(w, 12 * 0.2 + 0.1, true);
-    expect(ev.filter((e) => e === 'fired').length).toBe(12);
-    expect(ev).toContain('reloadStart');
-    expect(w.reloading).toBe(true);
-    run(w, WEAPONS.pistol.reloadTime + 0.05, false);
-    expect(w.reloading).toBe(false);
+    expect(shots(run(w, 2, true))).toBe(0);
     expect(w.ammo).toBe(12);
   });
 
-  it('cannot fire while reloading and manual reload only when not full', () => {
+  it('each tap fires exactly one shot', () => {
+    const w = new WeaponState(WEAPONS.pistol);
+    expect(shots(run(w, 0.5, false, true))).toBe(1);
+    expect(shots(run(w, 0.5, true, true))).toBe(1); // tap + held → still one
+    expect(w.ammo).toBe(10);
+  });
+
+  it('a tap during cooldown is buffered briefly, not lost', () => {
     const w = new WeaponState(WEAPONS.pistol);
     const ev: WeaponEvent[] = [];
-    w.update(DT, false, true, ev);
-    expect(ev).toEqual([]); // full mag: no reload
-    w.update(DT, true, false, ev); // fire one
-    w.update(DT, false, true, ev);
+    w.update(DT, false, true, false, ev);
+    expect(ev).toContain('fired');
+    let fired = 0;
+    // Tap again 0.1 s later (cooldown 0.2 s) → fires when cooldown ends.
+    for (let i = 0; i < 6; i++) w.update(DT, false, false, false, ev);
+    w.update(DT, false, true, false, ev);
+    for (let i = 0; i < 12; i++) { w.update(DT, false, false, false, ev); fired += shots(ev); }
+    expect(fired).toBe(1);
+  });
+
+  it('auto-reloads when empty and refills', () => {
+    const w = new WeaponState(WEAPONS.pistol);
+    let total = 0;
+    for (let i = 0; i < 12; i++) total += shots(run(w, 0.25, false, true));
+    expect(total).toBe(12);
+    expect(w.reloading).toBe(true);
+    expect(shots(run(w, 0.3, false, true))).toBe(0); // taps during reload are dropped
+    run(w, WEAPONS.pistol.reloadTime, false);
+    expect(w.ammo).toBe(12);
+  });
+});
+
+describe('automatic weapon (SMG)', () => {
+  it('fires continuously while held at the configured rate', () => {
+    const w = new WeaponState(WEAPONS.smg);
+    const n = shots(run(w, 1, true));
+    const expected = Math.ceil(1 / WEAPONS.smg.fireInterval);
+    expect(n).toBeGreaterThanOrEqual(expected - 1);
+    expect(n).toBeLessThanOrEqual(expected + 1);
+  });
+
+  it('stops immediately when the trigger is released', () => {
+    const w = new WeaponState(WEAPONS.smg);
+    run(w, 0.5, true);
+    const ammo = w.ammo;
+    expect(shots(run(w, 1, false))).toBe(0);
+    expect(w.ammo).toBe(ammo);
+  });
+});
+
+describe('manual reload', () => {
+  it('only when not full, and blocks firing', () => {
+    const w = new WeaponState(WEAPONS.smg);
+    const ev: WeaponEvent[] = [];
+    w.update(DT, false, false, true, ev);
+    expect(ev).toEqual([]);
+    w.update(DT, true, false, false, ev);
+    w.update(DT, false, false, true, ev);
     expect(ev).toContain('reloadStart');
-    w.update(DT, true, false, ev);
+    w.update(DT, true, false, false, ev);
     expect(ev).not.toContain('fired');
+    w.cancelReload();
+    expect(w.reloading).toBe(false);
   });
 });

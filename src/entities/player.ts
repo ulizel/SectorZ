@@ -20,7 +20,18 @@ export class Player {
   yaw = 0; prevYaw = 0;
   health = PLAYER.maxHealth;
   walkPhase = 0;
-  weapon = new WeaponState(WEAPONS.pistol);
+  readonly weapons = [new WeaponState(WEAPONS.pistol), new WeaponState(WEAPONS.smg)];
+  weaponIndex = 0;
+  get weapon(): WeaponState { return this.weapons[this.weaponIndex]; }
+
+  /** Switch to a slot (or -1 = next). Returns true if the weapon changed. */
+  switchWeapon(slot: number): boolean {
+    const next = slot < 0 ? (this.weaponIndex + 1) % this.weapons.length : slot;
+    if (next === this.weaponIndex || next >= this.weapons.length) return false;
+    this.weapon.cancelReload();
+    this.weaponIndex = next;
+    return true;
+  }
 
   constructor(id: number, physics: PhysicsWorld, x: number, z: number) {
     this.id = id;

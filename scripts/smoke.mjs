@@ -71,66 +71,73 @@ async function desktop(browser) {
   await page.screenshot({ path: `${OUT}/desktop-title.png` });
   await page.click('#start');
   await waitReady(page);
-  await sleep(500);
+  await ticks(page, 20);
   const s0 = await state(page);
   check('game running (sim ticks advancing)', s0.ticks > 10, `ticks=${s0.ticks}`);
-  console.log(`    (fps in headless software GL: ${(await state(page)).fps.toFixed(1)})`);
+  console.log(`    (fps in headless software GL: ${s0.fps.toFixed(1)})`);
 
-  // Shoot the barrel at (6,-1) from spawn: aim with the mouse, hold fire.
-  // The camera leans toward the aim direction, so re-project until it settles.
-  for (let i = 0; i < 5; i++) {
-    const target = await worldToScreen(page, 6, 1.15, -1);
-    await page.mouse.move(target.x, target.y);
-    await sleep(400);
-  }
-  const aimYaw = (await state(page)).yaw;
-  const yawTarget = Math.atan2(6 - s0.x, -1 - s0.z);
-  check('player faces the mouse target', Math.abs(Math.atan2(Math.sin(aimYaw - yawTarget), Math.cos(aimYaw - yawTarget))) < 0.12, `yaw=${aimYaw.toFixed(2)} want≈${yawTarget.toFixed(2)}`);
-  // Keep the cursor on target while firing.
-  const keepAim = setInterval(async () => {
-    try { const t = await worldToScreen(page, 6, 1.15, -1); await page.mouse.move(t.x, t.y); } catch {}
-  }, 150);
+  // Aim at the barrel at (6,-1). The camera leans toward the aim, so re-project until it settles.
+  const aimAt = async () => { const t = await worldToScreen(page, 6, 1.15, -1); await page.mouse.move(t.x, t.y); };
+  for (let i = 0; i < 5; i++) { await aimAt(); await sleep(400); }
+  const a = await state(page);
+  const yawTarget = Math.atan2(6 - a.x, -1 - a.z);
+  check('player faces the mouse target', Math.abs(Math.atan2(Math.sin(a.yaw - yawTarget), Math.cos(a.yaw - yawTarget))) < 0.12, `yaw=${a.yaw.toFixed(2)} want≈${yawTarget.toFixed(2)}`);
+  check('aim line shown with mouse', a.aimLineVisible);
+
+  // Pistol is single-shot: holding the button fires exactly one shot.
   await page.mouse.down();
-  await ticks(page, 90); // 1.5 game-seconds of fire
-  await page.mouse.up();
-  clearInterval(keepAim);
   await ticks(page, 60);
-  const s1 = await state(page);
-  check('mouse fire produces shots', s1.shots >= 5, `shots=${s1.shots}`);
-  check('ammo consumed / reloading', s1.ammo < 12 || s1.reloading, `ammo=${s1.ammo}`);
-  check('bullets hit dynamic props', s1.propHits >= 3, `propHits=${s1.propHits}`);
-  // Momentum transfer is deterministic; the final resting position depends on random spread
+  await page.mouse.up();
+  const b = await state(page);
+  check('pistol: click-and-hold fires exactly one shot', b.shots - a.shots === 1, `shots=${b.shots - a.shots}`);
+  for (let i = 0; i < 3; i++) { await aimAt(); await page.mouse.down(); await ticks(page, 2); await page.mouse.up(); await ticks(page, 16); }
+  await ticks(page, 40);
+  const c = await state(page);
+  check('pistol: each click fires one shot', c.shots - b.shots === 3, `shots=${c.shots - b.shots}`);
+  check('bullets hit dynamic props', c.propHits >= 3, `propHits=${c.propHits}`);
+  // Momentum transfer is deterministic; the final resting position depends on bullet spread
   // (exact toppling is covered by the headless physics test), so it's reported, not asserted.
-  check('bullet impulses push props', s1.maxImpactSpeed > 0.3, `peak prop speed=${s1.maxImpactSpeed.toFixed(2)}m/s, moved ${s1.maxPropMove.toFixed(2)}m`);
+  check('bullet impulses push props', c.maxImpactSpeed > 0.3, `peak prop speed=${c.maxImpactSpeed.toFixed(2)}m/s, moved ${c.maxPropMove.toFixed(2)}m`);
   await page.screenshot({ path: `${OUT}/desktop-shooting.png` });
 
-  // WASD movement: hold W for 1 s → move toward -Z by ~5 m.
+  // SMG (key 2) is automatic: holding fires continuously.
+  await page.keyboard.press('Digit2');
+  await ticks(page, 3);
+  check('key 2 switches to SMG', (await state(page)).weapon === 'smg');
+  const d = await state(page);
+  await page.mouse.down();
+  await ticks(page, 60);
+  await page.mouse.up();
+  await ticks(page, 10);
+  const e = await state(page);
+  check('SMG: holding fires continuously', e.shots - d.shots >= 9, `shots=${e.shots - d.shots}`);
+  await ticks(page, 30);
+  check('SMG: releasing stops fire', (await state(page)).shots === e.shots);
+  await page.keyboard.press('Digit1');
+
+  // WASD movement: hold W for 60 ticks → ~5 m toward -Z.
   await page.keyboard.down('KeyW');
   await ticks(page, 60);
   await page.keyboard.up('KeyW');
   await ticks(page, 12);
   const s2 = await state(page);
-  check('W moves the player up-screen (-Z)', s1.z - s2.z > 3, `dz=${(s1.z - s2.z).toFixed(2)}`);
+  check('W moves the player up-screen (-Z)', e.z - s2.z > 3, `dz=${(e.z - s2.z).toFixed(2)}`);
   await page.keyboard.down('KeyD');
   await ticks(page, 36);
   await page.keyboard.up('KeyD');
   await ticks(page, 12);
   const s3 = await state(page);
   check('D moves the player right (+X)', s3.x - s2.x > 1.5, `dx=${(s3.x - s2.x).toFixed(2)}`);
-
-  // Manual reload.
   await page.keyboard.press('KeyR');
   await ticks(page, 3);
   const s4 = await state(page);
   check('R reloads (or mag already full)', s4.reloading || s4.ammo === 12, `ammo=${s4.ammo} reloading=${s4.reloading}`);
-  await ticks(page, 90);
-  await page.screenshot({ path: `${OUT}/desktop-moved.png` });
   check('no JS errors (desktop)', errors.length === 0 && (await page.evaluate(() => window.__SECTORZ__.errors.length)) === 0, errors.join(' | '));
   await page.close();
 }
 
 async function phone(browser, deviceName, landscape) {
-  console.log(`\n[${deviceName}${landscape ? ' landscape' : ''}, real touch events]`);
+  console.log(`\n[${deviceName}${landscape ? ' landscape' : ''}, real multi-touch events]`);
   const d = devices[deviceName];
   const ctx = await browser.newContext({
     ...d,
@@ -146,38 +153,139 @@ async function phone(browser, deviceName, landscape) {
   check('touch device detected → mobile quality + touch UI', await page.evaluate(() => document.body.classList.contains('touch')));
   await page.tap('#start');
   await waitReady(page);
-  await sleep(400);
+  await ticks(page, 20);
   const cdp = await ctx.newCDPSession(page);
   const vw = page.viewportSize().width, vh = page.viewportSize().height;
   const touch = (type, points) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: points });
   const L = { x: vw * 0.22, y: vh * 0.7, id: 1 };
-  const R = { x: vw * 0.78, y: vh * 0.7, id: 2 };
+  const R = { x: vw * 0.78, y: vh * 0.55, id: 2 };
+  const LU = { ...L, y: L.y - 70 }; // left stick pushed up
+  /** Drag the right thumb (optionally while the left thumb is held) in 5 steps to dx,dy. */
+  async function dragRight(dx, dy, left = null) {
+    for (let i = 1; i <= 5; i++) {
+      const pts = [{ ...R, x: R.x + (dx * i) / 5, y: R.y + (dy * i) / 5 }];
+      await touch('touchMove', left ? [left, ...pts] : pts);
+      await sleep(16);
+    }
+  }
 
+  // 1. Movement: left thumb up, 360° stick; release stops.
   const s0 = await state(page);
-  // Left thumb: push up to walk toward -Z.
   await touch('touchStart', [L]);
   for (let i = 1; i <= 5; i++) { await touch('touchMove', [{ ...L, y: L.y - i * 14 }]); await sleep(16); }
   await ticks(page, 54);
-  // Add right thumb: aim right and fire while still moving.
-  await touch('touchStart', [{ ...L, y: L.y - 70 }, R]);
-  for (let i = 1; i <= 5; i++) { await touch('touchMove', [{ ...L, y: L.y - 70 }, { ...R, x: R.x + i * 14 }]); await sleep(16); }
-  await ticks(page, 72);
-  await page.screenshot({ path: `${OUT}/${deviceName.replace(/\W+/g, '-')}${landscape ? '-landscape' : ''}.png` });
   await touch('touchEnd', []);
   await ticks(page, 12);
   const s1 = await state(page);
-  console.log(`    (fps in headless software GL: ${s1.fps.toFixed(1)})`);
-  check('left stick moves player up (-Z)', s0.z - s1.z > 3, `dz=${(s0.z - s1.z).toFixed(2)}`);
-  check('right stick fires', s1.shots >= 4, `shots=${s1.shots}`);
-  check('right stick aims (+X → yaw≈+π/2)', Math.abs(s1.yaw - Math.PI / 2) < 0.3, `yaw=${s1.yaw.toFixed(2)}`);
+  check('left stick moves player up (-Z)', s0.z - s1.z > 2.5, `dz=${(s0.z - s1.z).toFixed(2)}`);
+  await ticks(page, 12);
+  check('releasing the left stick stops movement', Math.hypot((await state(page)).z - s1.z) < 0.05);
+  check('no shots from movement', s1.shots === 0);
+
+  // 2. Quick tap on the right half is ignored.
+  await touch('touchStart', [R]);
+  await ticks(page, 2);
+  await touch('touchEnd', []);
+  await ticks(page, 10);
   const s2 = await state(page);
-  await ticks(page, 18);
+  check('quick tap on right half does not fire', s2.shots === s1.shots, `shots=${s2.shots}`);
+
+  // 3. Pistol lift-to-fire: dragging shows only the aim line; lifting fires one shot.
+  await touch('touchStart', [R]);
+  await dragRight(70, 0);
+  await ticks(page, 40);
   const s3 = await state(page);
-  check('player stops when thumbs lift', Math.hypot(s3.x - s2.x, s3.z - s2.z) < 0.05);
+  check('dragging right stick shows aim line', s3.aimLineVisible === true);
+  check('pistol: no shot while dragging', s3.shots === s2.shots, `shots=${s3.shots - s2.shots}`);
+  check('aim follows stick exactly (+X)', Math.abs(s3.aimX - 1) < 0.01 && Math.abs(s3.aimZ) < 0.01, `aim=(${s3.aimX.toFixed(2)},${s3.aimZ.toFixed(2)})`);
+  await page.screenshot({ path: `${OUT}/${deviceName.replace(/\W+/g, '-')}${landscape ? '-landscape' : ''}-aiming.png` });
+  await touch('touchEnd', []);
+  await ticks(page, 6);
+  const s4 = await state(page);
+  check('pistol: lifting the thumb fires exactly one shot', s4.shots - s3.shots === 1, `shots=${s4.shots - s3.shots}`);
+  check('aim line hidden after release', s4.aimLineVisible === false);
+
+  // 4. Shot cancel: drag out, back into the deadzone, release → nothing.
+  await ticks(page, 15);
+  await touch('touchStart', [R]);
+  await dragRight(0, 70);
+  await ticks(page, 10);
+  check('aim line visible (down)', (await state(page)).aimLineVisible);
+  for (let i = 4; i >= 0; i--) { await touch('touchMove', [{ ...R, y: R.y + i * 14 * 0.2 }]); await sleep(16); }
+  await ticks(page, 10);
+  const s5 = await state(page);
+  check('dragging back into deadzone hides aim line', s5.aimLineVisible === false);
+  await touch('touchEnd', []);
+  await ticks(page, 10);
+  check('cancelled shot does not fire', (await state(page)).shots === s4.shots);
+
+  // 5. Multi-touch: move and aim at the same time, lift to fire while moving.
+  const m0 = await state(page);
+  await touch('touchStart', [L]);
+  for (let i = 1; i <= 5; i++) { await touch('touchMove', [{ ...L, y: L.y - i * 14 }]); await sleep(16); }
+  await touch('touchStart', [LU, R]);
+  await dragRight(-70, 0, LU);
+  await ticks(page, 30);
+  const m1 = await state(page);
+  check('multi-touch: moving while aiming left', m0.z - m1.z > 1 && m1.aimX < -0.99, `dz=${(m0.z - m1.z).toFixed(2)} aimX=${m1.aimX.toFixed(2)}`);
+  await touch('touchEnd', [{ ...R, x: R.x - 70 }]); // CDP: touchEnd lists the finger(s) being lifted
+  await ticks(page, 6);
+  const m2 = await state(page);
+  check('multi-touch: lifting right thumb fires while still moving', m2.shots - m1.shots === 1 && m1.z - m2.z > 0.2, `shots=${m2.shots - m1.shots}`);
+  await touch('touchEnd', []);
+  await ticks(page, 6);
+
+  // 6. Automatic weapon: hold-to-fire, cancel stops firing.
+  await page.tap('#switch-btn');
+  await ticks(page, 3);
+  check('⇄ button switches to SMG', (await state(page)).weapon === 'smg');
+  const f0 = await state(page);
+  await touch('touchStart', [R]);
+  await dragRight(0, -70);
+  await ticks(page, 60);
+  const f1 = await state(page);
+  check('SMG: fires continuously while aimed', f1.shots - f0.shots >= 9, `shots=${f1.shots - f0.shots}`);
+  await page.screenshot({ path: `${OUT}/${deviceName.replace(/\W+/g, '-')}${landscape ? '-landscape' : ''}-smg.png` });
+  for (let i = 4; i >= 0; i--) { await touch('touchMove', [{ ...R, y: R.y - i * 14 * 0.2 }]); await sleep(16); }
+  await ticks(page, 6);
+  const f2 = await state(page);
+  await ticks(page, 30);
+  const f3 = await state(page);
+  check('SMG: back into deadzone stops firing', f3.shots === f2.shots && !f3.aimLineVisible, `extra=${f3.shots - f2.shots}`);
+  await touch('touchEnd', []);
+  await ticks(page, 10);
+  check('SMG: release after cancel fires nothing', (await state(page)).shots === f3.shots);
+
+  // 7. Reload button.
   await page.tap('#reload-btn');
   await ticks(page, 3);
-  const s4 = await state(page);
-  check('reload button works', s4.reloading || s4.ammo === 12, `ammo=${s4.ammo}`);
+  const s6 = await state(page);
+  check('reload button works', s6.reloading || s6.ammo === 30, `ammo=${s6.ammo}`);
+
+  // 8. Browser lock: pinch and pull-down gestures must not zoom, scroll, or select.
+  await touch('touchStart', [{ x: vw * 0.45, y: vh * 0.5, id: 7 }, { x: vw * 0.55, y: vh * 0.5, id: 8 }]);
+  for (let i = 1; i <= 6; i++) {
+    await touch('touchMove', [{ x: vw * 0.45 - i * 20, y: vh * 0.5, id: 7 }, { x: vw * 0.55 + i * 20, y: vh * 0.5, id: 8 }]);
+    await sleep(16);
+  }
+  await touch('touchEnd', []);
+  await touch('touchStart', [{ x: vw * 0.3, y: 20, id: 9 }]);
+  for (let i = 1; i <= 8; i++) { await touch('touchMove', [{ x: vw * 0.3, y: 20 + i * 40, id: 9 }]); await sleep(16); }
+  await touch('touchEnd', []);
+  await page.touchscreen.tap(vw * 0.5, 30); // long-press/double-tap targets
+  await page.touchscreen.tap(vw * 0.5, 30);
+  await ticks(page, 5);
+  const lock = await page.evaluate(() => ({
+    scale: visualViewport ? visualViewport.scale : 1,
+    scrollY: scrollY, scrollX: scrollX,
+    selection: String(getSelection()),
+    touchAction: getComputedStyle(document.body).touchAction,
+    overscroll: getComputedStyle(document.documentElement).overscrollBehaviorY,
+    userSelect: getComputedStyle(document.body).userSelect || getComputedStyle(document.body).webkitUserSelect,
+  }));
+  check('pinch / double-tap do not zoom', lock.scale === 1, `scale=${lock.scale}`);
+  check('swipes do not scroll / pull-to-refresh', lock.scrollX === 0 && lock.scrollY === 0 && lock.overscroll === 'none', JSON.stringify(lock));
+  check('no text selection possible', lock.selection === '' && lock.userSelect === 'none' && lock.touchAction === 'none');
   check('no JS errors (phone)', errors.length === 0, errors.join(' | '));
   await ctx.close();
 }

@@ -7,20 +7,41 @@ export interface InputCommand {
   moveZ: number; // -1..1 world Z
   aimX: number; // normalised world-space aim direction (0,0 = keep current)
   aimZ: number;
-  fire: boolean;
+  /** Player is deliberately aiming (touch: aim stick past deadzone; mouse: always). */
+  aiming: boolean;
+  /** Trigger held this tick (automatic weapons fire while true). */
+  trigger: boolean;
+  /** One-shot trigger pull this tick (single-shot weapons fire on this). */
+  triggerTap: boolean;
   reload: boolean;
+  /** Weapon slot to switch to, or -1 for "next", or null for no change. */
+  switchWeapon: number | null;
 }
 
-export const emptyCommand = (): InputCommand => ({ moveX: 0, moveZ: 0, aimX: 0, aimZ: 0, fire: false, reload: false });
+export const emptyCommand = (): InputCommand => ({
+  moveX: 0, moveZ: 0, aimX: 0, aimZ: 0, aiming: false, trigger: false, triggerTap: false, reload: false, switchWeapon: null,
+});
 
-/** Raw, device-level state. Resolved into an InputCommand by the game (needs camera for mouse aim). */
+/** Raw, device-level state. Resolved into an InputCommand by the game (needs camera + weapon type). */
 export interface RawInput {
   moveX: number; // screen-space: +x right, +y down
   moveY: number;
-  /** Aim as a screen pixel position (mouse) … */
+  /** Mouse aim as a screen pixel position. */
   aimScreen: { x: number; y: number } | null;
-  /** … or as a stick direction (touch / gamepad), screen-space. */
+  /** Mouse button held / pressed this tick (edge). */
+  mouseHeld: boolean;
+  mousePressed: boolean;
+  /** Touch aim stick: direction (screen space) while aiming, or on the release tick. */
   aimStick: { x: number; y: number } | null;
-  fire: boolean;
+  /** Touch aim stick is past the deadzone right now. */
+  stickAiming: boolean;
+  /** Touch aim stick was lifted while aiming this tick (lift-to-fire). */
+  stickReleased: boolean;
   reload: boolean;
+  switchWeapon: number | null;
 }
+
+export const emptyRaw = (): RawInput => ({
+  moveX: 0, moveY: 0, aimScreen: null, mouseHeld: false, mousePressed: false,
+  aimStick: null, stickAiming: false, stickReleased: false, reload: false, switchWeapon: null,
+});

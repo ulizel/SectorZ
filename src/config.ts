@@ -7,7 +7,7 @@ export const PLAYER = {
   moveSpeed: 5.2, // m/s
   accel: 40, // m/s² toward target velocity
   decel: 32,
-  turnSpeed: 18, // rad/s body yaw toward aim
+  turnSpeed: 26, // rad/s body yaw toward aim
   radius: 0.32,
   halfHeight: 0.55, // capsule half-height (cylindrical part)
   maxHealth: 100,

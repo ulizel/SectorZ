@@ -4,7 +4,9 @@ export class KeyboardMouse {
   private keys = new Set<string>();
   private mouse: { x: number; y: number } | null = null;
   private down = false;
+  private pressedQueued = false;
   private reloadQueued = false;
+  private switchQueued: number | null = null;
   active = false; // becomes true on first mouse/keyboard use
 
   constructor(target: HTMLElement) {
@@ -12,6 +14,10 @@ export class KeyboardMouse {
       if (e.repeat) return;
       this.keys.add(e.code);
       if (e.code === 'KeyR') this.reloadQueued = true;
+      if (e.code === 'Digit1') this.switchQueued = 0;
+      if (e.code === 'Digit2') this.switchQueued = 1;
+      if (e.code === 'KeyQ') this.switchQueued = -1;
+      if (e.code === 'Space') this.pressedQueued = true;
       this.active = true;
     });
     addEventListener('keyup', (e) => this.keys.delete(e.code));
@@ -25,10 +31,11 @@ export class KeyboardMouse {
       if (e.pointerType !== 'mouse' || e.button !== 0) return;
       this.mouse = { x: e.clientX, y: e.clientY };
       this.down = true;
+      this.pressedQueued = true; // edge survives even if released before the next sim tick
       this.active = true;
     });
     addEventListener('pointerup', (e) => { if (e.pointerType === 'mouse') this.down = false; });
-    target.addEventListener('contextmenu', (e) => e.preventDefault());
+    target.addEventListener('wheel', (e) => { if (Math.abs(e.deltaY) > 4) this.switchQueued = -1; }, { passive: true });
   }
 
   read(out: RawInput): void {
@@ -41,7 +48,10 @@ export class KeyboardMouse {
     const len = Math.hypot(x, y);
     if (len > 0) { out.moveX = x / len; out.moveY = y / len; }
     if (this.mouse) out.aimScreen = this.mouse;
-    if (this.down || k.has('Space')) out.fire = true;
+    out.mouseHeld = this.down || k.has('Space');
+    out.mousePressed = this.pressedQueued;
+    this.pressedQueued = false;
     if (this.reloadQueued) { out.reload = true; this.reloadQueued = false; }
+    if (this.switchQueued !== null) { out.switchWeapon = this.switchQueued; this.switchQueued = null; }
   }
 }

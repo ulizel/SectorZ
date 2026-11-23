@@ -1,4 +1,5 @@
 import type { RawInput } from './commands';
+import { AimStickLogic, AIM_DEADZONE } from './aimStick';
 
 interface Stick {
   id: number;
@@ -9,31 +10,39 @@ interface Stick {
 }
 
 const RADIUS = 56; // px of full deflection
-const FIRE_THRESHOLD = 0.35;
+const MOVE_DEADZONE = 0.12;
 
 /**
- * Floating twin sticks: touch anywhere on the left half to move, right half to aim.
- * Pushing the aim stick past FIRE_THRESHOLD fires. Uses Pointer Events (iOS Safari 13+, Android Chrome).
+ * Floating twin sticks (Pointer Events: iOS Safari 13+, Android Chrome):
+ *  - left half: movement stick, 360°, releasing stops.
+ *  - right half: aim stick (see AimStickLogic): deadzone, aim line, lift-to-fire / hold-to-fire, cancel.
  */
 export class TouchSticks {
   private left: Stick;
   private right: Stick;
+  readonly aim = new AimStickLogic();
   private reloadQueued = false;
+  private switchQueued = false;
   active = false;
 
-  constructor(private readonly layer: HTMLElement, reloadButton: HTMLElement) {
+  constructor(private readonly layer: HTMLElement, reloadButton: HTMLElement, switchButton: HTMLElement) {
     this.left = this.makeStick('move');
     this.right = this.makeStick('aim');
     layer.addEventListener('pointerdown', (e) => this.onDown(e));
     layer.addEventListener('pointermove', (e) => this.onMove(e));
     layer.addEventListener('pointerup', (e) => this.onUp(e));
-    layer.addEventListener('pointercancel', (e) => this.onUp(e));
-    reloadButton.addEventListener('pointerdown', (e) => { e.stopPropagation(); this.reloadQueued = true; });
+    layer.addEventListener('pointercancel', (e) => this.onUp(e, true));
+    reloadButton.addEventListener('pointerdown', (e) => { e.stopPropagation(); e.preventDefault(); this.reloadQueued = true; });
+    switchButton.addEventListener('pointerdown', (e) => { e.stopPropagation(); e.preventDefault(); this.switchQueued = true; });
   }
 
   private makeStick(kind: string): Stick {
     const base = document.createElement('div');
     base.className = `stick stick-${kind}`;
+    const ring = document.createElement('div');
+    ring.className = 'stick-deadzone';
+    ring.style.width = ring.style.height = `${AIM_DEADZONE * RADIUS * 2}px`;
+    if (kind === 'aim') base.appendChild(ring);
     const knob = document.createElement('div');
     knob.className = 'stick-knob';
     base.appendChild(knob);
@@ -42,19 +51,20 @@ export class TouchSticks {
   }
 
   private onDown(e: PointerEvent): void {
-    if (e.pointerType === 'mouse' && !this.active) return; // desktop mouse is handled elsewhere
-    const stick = e.clientX < innerWidth / 2 ? this.left : this.right;
-    if (stick.id !== -1) return;
+    if (e.pointerType === 'mouse') return; // desktop mouse is handled by KeyboardMouse
     e.preventDefault();
+    const stick = e.clientX < innerWidth / 2 ? this.left : this.right;
+    if (stick.id !== -1) return; // one thumb per stick
     this.active = true;
     stick.id = e.pointerId;
     stick.ox = e.clientX;
     stick.oy = e.clientY;
     stick.x = stick.y = 0;
-    this.layer.setPointerCapture?.(e.pointerId);
+    try { this.layer.setPointerCapture(e.pointerId); } catch { /* synthetic pointers */ }
     stick.base.style.transform = `translate(${stick.ox - RADIUS}px, ${stick.oy - RADIUS}px)`;
     stick.base.classList.add('on');
     stick.knob.style.transform = 'translate(0px,0px)';
+    if (stick === this.right) this.aim.start();
   }
 
   private onMove(e: PointerEvent): void {
@@ -75,14 +85,21 @@ export class TouchSticks {
     stick.x = dx / RADIUS;
     stick.y = dy / RADIUS;
     stick.knob.style.transform = `translate(${dx}px, ${dy}px)`;
+    if (stick === this.right) {
+      this.aim.move(stick.x, stick.y);
+      stick.base.classList.toggle('aiming', this.aim.aiming);
+    }
   }
 
-  private onUp(e: PointerEvent): void {
+  private onUp(e: PointerEvent, cancelled = false): void {
     for (const s of [this.left, this.right]) {
-      if (s.id === e.pointerId) {
-        s.id = -1;
-        s.x = s.y = 0;
-        s.base.classList.remove('on');
+      if (s.id !== e.pointerId) continue;
+      s.id = -1;
+      s.x = s.y = 0;
+      s.base.classList.remove('on', 'aiming');
+      if (s === this.right) {
+        if (cancelled) this.aim.move(0, 0); // OS-cancelled touch (e.g. notification) never fires
+        this.aim.end();
       }
     }
   }
@@ -90,18 +107,21 @@ export class TouchSticks {
   read(out: RawInput): void {
     const l = this.left;
     const ll = Math.hypot(l.x, l.y);
-    if (ll > 0.12) {
+    if (ll > MOVE_DEADZONE) {
       // Dead zone, then rescale so small pushes give slow walking.
-      const m = Math.min(1, (ll - 0.12) / 0.88);
+      const m = Math.min(1, (ll - MOVE_DEADZONE) / (1 - MOVE_DEADZONE));
       out.moveX = (l.x / ll) * m;
       out.moveY = (l.y / ll) * m;
     }
-    const r = this.right;
-    const rl = Math.hypot(r.x, r.y);
-    if (rl > 0.15) {
-      out.aimStick = { x: r.x / rl, y: r.y / rl };
-      if (rl > FIRE_THRESHOLD) out.fire = true;
+    const release = this.aim.consumeRelease();
+    if (release) {
+      out.stickReleased = true;
+      out.aimStick = release;
+    } else if (this.aim.aiming) {
+      out.stickAiming = true;
+      out.aimStick = { x: this.aim.dirX, y: this.aim.dirY };
     }
     if (this.reloadQueued) { out.reload = true; this.reloadQueued = false; }
+    if (this.switchQueued) { out.switchWeapon = -1; this.switchQueued = false; }
   }
 }

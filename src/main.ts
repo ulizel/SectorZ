@@ -18,9 +18,29 @@ const api: Window['__SECTORZ__'] = (window.__SECTORZ__ = { ready: false, errors:
 addEventListener('error', (e) => api.errors.push(String(e.message)));
 addEventListener('unhandledrejection', (e) => api.errors.push(String(e.reason)));
 
-// iOS Safari: block pinch/double-tap zoom gestures that fight the twin sticks.
-for (const ev of ['gesturestart', 'gesturechange', 'dblclick']) document.addEventListener(ev, (e) => e.preventDefault(), { passive: false });
-document.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
+lockMobileBrowser();
+
+/**
+ * Mobile browser lock: no scrolling, pinch/double-tap zoom, text selection, long-press
+ * callouts or pull-to-refresh, so multi-touch twin-stick input stays smooth.
+ * CSS (touch-action / overscroll-behavior / user-select) handles Chrome/Android;
+ * the listeners cover iOS Safari, which ignores parts of the CSS.
+ */
+function lockMobileBrowser(): void {
+  const block = (e: Event) => { if (e.cancelable) e.preventDefault(); };
+  const opts = { passive: false } as const;
+  // All touches belong to the game. Buttons use Pointer Events, which still fire.
+  document.addEventListener('touchstart', block, opts);
+  document.addEventListener('touchmove', block, opts);
+  document.addEventListener('touchend', block, opts); // kills double-tap-to-zoom + synthetic clicks
+  for (const ev of ['gesturestart', 'gesturechange', 'gestureend', 'dblclick', 'contextmenu', 'selectstart', 'dragstart']) {
+    document.addEventListener(ev, block, opts);
+  }
+  // Ctrl+wheel / trackpad pinch zoom on desktop browsers.
+  document.addEventListener('wheel', (e) => { if (e.ctrlKey) e.preventDefault(); }, opts);
+  // If anything ever scrolls the document (iOS address-bar quirks), snap it back.
+  addEventListener('scroll', () => { if (scrollX || scrollY) scrollTo(0, 0); }, { passive: true });
+}
 
 const status = document.getElementById('status')!;
 const startBtn = document.getElementById('start') as HTMLButtonElement;
@@ -36,6 +56,7 @@ async function boot(): Promise<void> {
     document.getElementById('app')!,
     document.getElementById('touch')!,
     document.getElementById('reload-btn')!,
+    document.getElementById('switch-btn')!,
     quality,
   );
   api.game = game;
@@ -46,8 +67,8 @@ async function boot(): Promise<void> {
   game.renderer.render();
 
   status.textContent = quality.name === 'mobile'
-    ? 'Left thumb: move · Right thumb: aim & fire'
-    : 'WASD: move · Mouse: aim · Click: fire · R: reload';
+    ? 'Left thumb: move · Right thumb: drag to aim, lift to shoot (SMG: hold) · ⇄ switch weapon'
+    : 'WASD move · Mouse aim · Click fire · R reload · 1/2/Q switch weapon';
   startBtn.disabled = false;
   startBtn.textContent = quality.name === 'mobile' ? 'TAP TO PLAY' : 'CLICK TO PLAY';
   const begin = () => {
@@ -55,7 +76,7 @@ async function boot(): Promise<void> {
     game.start();
     api.ready = true;
   };
-  startBtn.addEventListener('click', begin, { once: true });
+  startBtn.addEventListener('pointerup', begin, { once: true }); // pointer, not click: touch defaults are blocked
   if (new URLSearchParams(location.search).has('autostart')) begin();
 }
 

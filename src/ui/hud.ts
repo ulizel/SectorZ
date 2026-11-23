@@ -7,10 +7,12 @@ export class Hud {
   private readonly reloadWrap = document.getElementById('reload')!;
   private readonly health = document.getElementById('health-fill')!;
   private lastAmmo = -1;
+  private lastWeapon = '';
   private lastReload = -1;
 
   update(weapon: WeaponState, health: number, maxHealth: number): void {
-    if (weapon.ammo !== this.lastAmmo) {
+    if (weapon.ammo !== this.lastAmmo || weapon.def.id !== this.lastWeapon) {
+      this.lastWeapon = weapon.def.id;
       this.ammo.textContent = `${weapon.ammo}`;
       this.ammo.classList.toggle('low', weapon.ammo <= Math.ceil(weapon.def.magSize * 0.25));
       this.weaponName.textContent = weapon.def.name.toUpperCase();
