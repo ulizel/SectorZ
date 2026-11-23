@@ -55,6 +55,9 @@ const CCD_PARTS = new Set<PartName>(['head', 'forearmL', 'forearmR', 'upperArmL'
 export const ZOMBIE_MAX_HP = 100;
 /** Per-hit instant jolt (rad/s per unit of hit strength) for the struck limb and the upper body. */
 const KICK_LIMB = 4, KICK_BODY = 2.2;
+/** Arms and legs react this much harder than torso/head when they are the part hit. */
+const LIMB_REACT = 2.5;
+const isLimb = (n: PartName) => n.startsWith('upperArm') || n.startsWith('forearm') || n.startsWith('thigh') || n.startsWith('shin');
 /** Impulse within ~0.05 s that knocks a zombie off its feet (a close shotgun blast; not pistol/SMG). */
 export const KNOCKDOWN_IMPULSE = 45;
 const PART_IDX = Object.fromEntries(HUMANOID.map((d, i) => [d.name, i])) as Record<PartName, number>;
@@ -243,14 +246,14 @@ export class Zombie {
       0, Math.sin(t * 0.8) * 0.06 - sw * 0.08 + this.sway.z);
     p.head.rotation.set(-0.25 + Math.sin(t * 1.7) * 0.08 - fl('head') * 1.5 + lean * 0.5 + this.underFire * 0.25, Math.sin(t * 0.6) * 0.3, Math.sin(t * 0.9) * 0.15 + this.sway.z * 0.6);
     const armBob = Math.sin(ph * 2) * 0.08 * move;
-    p.upperArmL.rotation.set(-1.25 + Math.sin(t * 1.4) * 0.12 + fl('upperArmL') + reel + armBob - wind * 1.0 + strike * 0.6, -0.1, 0.05 + wind * 0.3);
-    p.upperArmR.rotation.set(-1.15 + Math.sin(t * 1.2 + 1) * 0.12 + fl('upperArmR') + reel - armBob - wind * 1.0 + strike * 0.6, 0.1, -0.05 - wind * 0.3);
-    p.forearmL.rotation.set(-0.25 + fl('forearmL') - wind * 0.8, 0, 0);
-    p.forearmR.rotation.set(-0.4 + fl('forearmR') - wind * 0.8, 0, 0);
-    p.thighL.rotation.set(-0.1 - sw + fl('thighL') * 0.5, 0, 0.04);
-    p.thighR.rotation.set(0.05 + sw * 0.8 + fl('thighR') * 0.5, 0, -0.04); // shorter stride: a limp
-    p.shinL.rotation.set(0.15 + Math.max(0, Math.sin(ph + 1.3)) * 0.8 * move + fl('shinL') * 0.5, 0, 0);
-    p.shinR.rotation.set(0.1 + Math.max(0, Math.sin(ph + Math.PI + 1.3)) * 0.6 * move + fl('shinR') * 0.5, 0, 0);
+    p.upperArmL.rotation.set(-1.25 + Math.sin(t * 1.4) * 0.12 + fl('upperArmL') + reel + armBob - wind * 1.0 + strike * 0.6, -0.1 - fl('upperArmL') * 0.5, 0.05 + wind * 0.3 + fl('upperArmL') * 0.6);
+    p.upperArmR.rotation.set(-1.15 + Math.sin(t * 1.2 + 1) * 0.12 + fl('upperArmR') + reel - armBob - wind * 1.0 + strike * 0.6, 0.1 + fl('upperArmR') * 0.5, -0.05 - wind * 0.3 - fl('upperArmR') * 0.6);
+    p.forearmL.rotation.set(-0.25 + fl('forearmL') - wind * 0.8, fl('forearmL') * 0.7, 0);
+    p.forearmR.rotation.set(-0.4 + fl('forearmR') - wind * 0.8, -fl('forearmR') * 0.7, 0);
+    p.thighL.rotation.set(-0.1 - sw + fl('thighL'), fl('thighL') * 0.4, 0.04 + fl('thighL') * 0.35);
+    p.thighR.rotation.set(0.05 + sw * 0.8 + fl('thighR'), -fl('thighR') * 0.4, -0.04 - fl('thighR') * 0.35); // shorter stride: a limp
+    p.shinL.rotation.set(0.15 + Math.max(0, Math.sin(ph + 1.3)) * 0.8 * move + fl('shinL') * 1.2, 0, 0);
+    p.shinR.rotation.set(0.1 + Math.max(0, Math.sin(ph + Math.PI + 1.3)) * 0.6 * move + fl('shinR') * 1.2, 0, 0);
     this.pose.root.updateMatrixWorld(true);
   }
 
@@ -288,7 +291,7 @@ export class Zombie {
     const sat = (x: number, max: number) => Math.sign(x) * max * (1 - Math.exp(-Math.abs(x) / max));
     for (const p of this.parts) {
       p.flinchTarget *= RECOVER;
-      p.flinchVel += (SPRING * (sat(p.flinchTarget, 1.1) - p.flinch) - DAMP * p.flinchVel) * dt;
+      p.flinchVel += (SPRING * (sat(p.flinchTarget, isLimb(p.def.name) ? 1.8 : 1.1) - p.flinch) - DAMP * p.flinchVel) * dt;
       p.flinch += p.flinchVel * dt;
     }
     const s = this.sway;
@@ -522,14 +525,15 @@ export class Zombie {
         // Spread the hit: ~40% into the struck limb, ~60% into a whole-body lean away from the
         // shot; plus a damped knockback push. Targets accumulate, visuals follow via springs.
         const k = impulse * 0.05 * flinch;
-        p.flinchTarget += k * 0.4;
+        const lr = isLimb(p.def.name) ? LIMB_REACT : 1;
+        p.flinchTarget += k * 0.4 * lr;
         const fx = Math.sin(this.yaw), fz = Math.cos(this.yaw);
         const fwd = (ix * fx + iz * fz) / (impulse || 1); // + = pushed toward its front
         const left = (ix * fz - iz * fx) / (impulse || 1); // + = pushed toward its left (+X local)
         this.sway.tx += k * 0.6 * fwd;
         this.sway.tz -= k * 0.6 * left;
         // Micro-kick: an instant velocity jolt per bullet on top of the smooth lean (felt impact).
-        p.flinchVel += k * KICK_LIMB;
+        p.flinchVel += k * KICK_LIMB * lr;
         this.sway.vx += k * KICK_BODY * fwd;
         this.sway.vz -= k * KICK_BODY * left;
         this.pushV.x += ix * 0.06 * flinch; this.pushV.z += iz * 0.06 * flinch;
