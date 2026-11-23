@@ -13,7 +13,7 @@ import type { Zombie } from './entities/zombie';
 import { ZombieRenderer } from './render/zombieRenderer';
 import { ZombieAI, AI as AI_CFG, type AttackResult } from './ai/zombieAI';
 import { ARENA } from './config';
-import { WaveDirector, type WaveEvent } from './systems/waves';
+import { WaveDirector, WEAPON_UNLOCKS, type WaveEvent } from './systems/waves';
 import { Pickups, LOOT, type PickupKind } from './systems/pickups';
 import { Group, groups, ALL, PhysicsWorld, MATERIAL_COST, type RayHit } from './physics/physicsWorld';
 import { BulletViews, type BulletVisual } from './render/bulletViews';
@@ -214,6 +214,7 @@ export class Game {
   }
 
   start(): void {
+    this.resetUnlocks();
     this.sfx.unlock();
     this.loop.start();
   }
@@ -796,6 +797,7 @@ export class Game {
     for (const w of p.weapons) { w.ammo = w.def.magSize; w.cancelReload(); }
     for (const w of p.weapons) w.reserve = w.def.reserveStart;
     p.grenades = GRENADE.start;
+    this.resetUnlocks();
     for (let i = this.grenades.length - 1; i >= 0; i--) this.removeGrenade(i);
     this.stats.kills = 0; this.stats.dismembers = 0; this.stats.wave = 0;
     this.deathShown = false;
@@ -811,10 +813,34 @@ export class Game {
     const max = this.quality.name === 'mobile' ? 8 : 12;
     const n = this.waves.update(dt, this.zombies.aliveCount, max, this.waveEvents);
     for (const e of this.waveEvents) {
-      if (e.type === 'waveStart') { this.hud.banner(`WAVE ${e.wave}`, `${e.count} zombies`); this.sfx.waveStart(); }
+      if (e.type === 'waveStart') {
+        const unlocked = this.unlockWeapons(e.wave);
+        this.hud.banner(`WAVE ${e.wave}`, unlocked ? `${unlocked.toUpperCase()} UNLOCKED · ${e.count} zombies` : `${e.count} zombies`);
+        this.sfx.waveStart();
+        if (unlocked) this.sfx.pickup();
+      }
       else { this.hud.banner(`WAVE ${e.wave} CLEARED`, 'catch your breath'); this.sfx.waveClear(); this.stats.wave = e.wave; this.restockBarrels(); this.giveGrenade(); }
     }
     for (let i = 0; i < n; i++) this.spawnWaveZombie();
+  }
+
+  /** Survival starts with the pistol only (Lab / ?nozombies keep every weapon). */
+  private resetUnlocks(): void {
+    const p = this.player;
+    p.unlocked = this.survival && !this.lab ? 1 : p.weapons.length;
+    if (p.weaponIndex >= p.unlocked) p.switchWeapon(0);
+    this.hud.weaponsUnlocked(p.unlocked);
+  }
+
+  /** Unlock weapons whose wave has come. Returns the name of a newly unlocked weapon, if any. */
+  private unlockWeapons(wave: number): string | null {
+    const p = this.player;
+    let name: string | null = null;
+    for (const u of WEAPON_UNLOCKS) {
+      if (wave >= u.wave && p.unlocked <= u.slot) { p.unlocked = u.slot + 1; name = p.weapons[u.slot].def.name; }
+    }
+    if (name) this.hud.weaponsUnlocked(p.unlocked);
+    return name;
   }
 
   /** Clearing a wave earns a grenade (up to the carry limit). */
@@ -841,7 +867,11 @@ export class Game {
   /** Walked over loot. Returns false if it's of no use right now (stays on the ground). */
   private takePickup(k: PickupKind): boolean {
     const p = this.player;
-    if (k === 'health') {
+    if (k === 'grenade') {
+      if (p.grenades >= GRENADE.max) return false;
+      p.grenades++;
+      this.hud.toast('+1 GRENADE');
+    } else if (k === 'health') {
       if (p.health >= PLAYER.maxHealth) return false;
       p.health = Math.min(PLAYER.maxHealth, p.health + LOOT.healthAmount);
       this.hud.toast(`+${LOOT.healthAmount} HEALTH`);
@@ -1011,7 +1041,7 @@ export class Game {
       zombiesAlive: this.zombies.aliveCount, ragdolls: this.zombies.ragdollCount, severed: this.zombies.severedCount,
       zombieHits: this.stats.zombieHits, kills: this.stats.kills, dismembers: this.stats.dismembers,
       damageTaken: this.stats.damageTaken, playerAlive: this.player.alive, wave: this.waves.wave, waveState: this.waves.state,
-      grenades: p.grenades, grenadesLive: this.grenades.length, grenadesThrown: this.stats.grenadesThrown,
+      grenades: p.grenades, unlocked: p.unlocked, grenadesLive: this.grenades.length, grenadesThrown: this.stats.grenadesThrown,
       grenadeBlasts: this.stats.grenadeBlasts, grenadeMode: this.grenadeMode, arcVisible: this.arcDots.visible,
       barrels: this.stats.barrels, explosiveBarrels: this.props.filter((q) => q.explosive).length,
       reserve: p.weapon.reserve, pickups: this.pickups.list.map((q) => q.kind), smgReserve: p.weapons[1].reserve, crawlers: this.zombies.zombies.filter((z) => z.crawler && z.alive).length,

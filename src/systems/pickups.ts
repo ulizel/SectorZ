@@ -1,12 +1,13 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
-export type PickupKind = 'ammo' | 'health';
+export type PickupKind = 'ammo' | 'health' | 'grenade';
 
 /** Loot tunables. */
 export const LOOT = {
   ammoChance: 0.3,
   healthChance: 0.12,
+  grenadeChance: 0.05,
   ammoAmount: 30, // SMG rounds
   shellAmount: 6, // shotgun shells
   healthAmount: 25,
@@ -43,6 +44,9 @@ export class Pickups {
       ammo: coloredBoxes([[0.42, 0.24, 0.26, 0x55602f, 0, 0, 0], [0.43, 0.05, 0.27, 0xd9a441, 0, 0.05, 0], [0.12, 0.04, 0.06, 0x2b2d31, 0, 0.14, 0]]),
       // White med kit with a red cross.
       health: coloredBoxes([[0.38, 0.26, 0.26, 0xeeeeea, 0, 0, 0], [0.24, 0.07, 0.272, 0xd0202a, 0, 0, 0], [0.07, 0.2, 0.272, 0xd0202a, 0, 0, 0]]),
+      // Olive frag grenade: body, darker bands, fuse cap and lever.
+      grenade: coloredBoxes([[0.22, 0.28, 0.22, 0x4a5a32, 0, 0, 0], [0.235, 0.04, 0.235, 0x34401f, 0, 0.05, 0], [0.235, 0.04, 0.235, 0x34401f, 0, -0.06, 0],
+        [0.1, 0.07, 0.1, 0x8c8f94, 0, 0.17, 0], [0.04, 0.2, 0.05, 0x8c8f94, 0.13, 0.08, 0], [0.06, 0.06, 0.02, 0xd9a441, -0.06, 0.2, 0]]),
     };
   }
 
@@ -60,6 +64,7 @@ export class Pickups {
     const r = rand();
     if (r < LOOT.healthChance) this.spawn('health', x, z);
     else if (r < LOOT.healthChance + LOOT.ammoChance) this.spawn('ammo', x, z);
+    else if (r < LOOT.healthChance + LOOT.ammoChance + LOOT.grenadeChance) this.spawn('grenade', x, z);
   }
 
   /**

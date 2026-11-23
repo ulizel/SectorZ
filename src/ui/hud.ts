@@ -27,7 +27,7 @@ export class Hud {
   update(weapon: WeaponState, health: number, maxHealth: number, grenades: number): void {
     if (grenades !== this.lastGrenades) {
       this.lastGrenades = grenades;
-      this.grenadeCount.textContent = `GRENADES ${grenades}`;
+      this.grenadeCount.textContent = `💣${grenades}`;
       this.grenadeBtn.querySelector('span')!.textContent = String(grenades);
       this.grenadeBtn.classList.toggle('empty', grenades === 0);
     }
@@ -63,7 +63,12 @@ export class Hud {
     this.health.style.width = `${(health / maxHealth) * 100}%`;
   }
 
-  /** Top-centre wave status. */
+  /** ⇄ only shows once there's a second weapon to switch to. */
+  weaponsUnlocked(n: number): void {
+    document.getElementById('switch-btn')!.classList.toggle('locked', n < 2);
+  }
+
+  /** Wave status line (top-left HUD column). */
   wave(state: 'waiting' | 'active' | 'break', n: number, left: number, timer: number): void {
     const txt = state === 'active' ? `WAVE ${n} · ${left} LEFT` : `NEXT WAVE IN ${Math.ceil(Math.max(0, timer))}`;
     if (txt !== this.lastWave) { this.waveEl.textContent = txt; this.lastWave = txt; }

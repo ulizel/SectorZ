@@ -25,13 +25,16 @@ export class Player {
   slowMul = 1;
   readonly weapons = [new WeaponState(WEAPONS.pistol), new WeaponState(WEAPONS.smg), new WeaponState(WEAPONS.shotgun)];
   weaponIndex = 0;
+  /** How many weapon slots are usable (survival unlocks them by wave; Lab/tests have all). */
+  unlocked = 3;
   grenades = GRENADE.start;
   get weapon(): WeaponState { return this.weapons[this.weaponIndex]; }
 
   /** Switch to a slot (or -1 = next). Returns true if the weapon changed. */
   switchWeapon(slot: number): boolean {
-    const next = slot < 0 ? (this.weaponIndex + 1) % this.weapons.length : slot;
-    if (next === this.weaponIndex || next >= this.weapons.length) return false;
+    const n = Math.min(this.unlocked, this.weapons.length);
+    const next = slot < 0 ? (this.weaponIndex + 1) % n : slot;
+    if (next === this.weaponIndex || next >= n) return false;
     this.weapon.cancelReload();
     this.weaponIndex = next;
     return true;

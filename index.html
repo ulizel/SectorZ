@@ -13,13 +13,15 @@
     <div id="touch"></div>
 
     <div id="hud">
-      <div id="health"><div id="health-fill"></div></div>
-      <div id="weapon">
-        <div id="weapon-name">PISTOL</div>
-        <div id="ammo-row"><span id="ammo">12</span><span id="reserve">/ ∞</span></div>
-        <div id="ammo-warn"></div>
-        <div id="grenade-count">GRENADES 3</div>
-        <div id="reload"><div id="reload-sweet"></div><div id="reload-bar"></div></div>
+      <!-- Top-left column: wave, health, weapon/ammo/grenades, reload (keeps the thumb areas clear). -->
+      <div id="hud-top">
+        <div id="wave-info"></div>
+        <div id="health"><div id="health-fill"></div></div>
+        <div id="weapon">
+          <div id="ammo-row"><span id="weapon-name">PISTOL</span><span id="ammo">12</span><span id="reserve">/ ∞</span><span id="grenade-count">💣3</span></div>
+          <div id="ammo-warn"></div>
+          <div id="reload"><div id="reload-sweet"></div><div id="reload-bar"></div></div>
+        </div>
       </div>
       <button id="reload-btn" aria-label="Reload">R</button>
       <button id="switch-btn" aria-label="Switch weapon">⇄</button>

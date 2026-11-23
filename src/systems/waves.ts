@@ -14,6 +14,9 @@ export const WAVES = {
   hpPerWave: 0.08, // +8% health per wave
 };
 
+/** Survival weapon unlocks: the slot becomes usable when this wave starts (pistol is always there). */
+export const WEAPON_UNLOCKS: { wave: number; slot: number }[] = [{ wave: 2, slot: 1 }, { wave: 4, slot: 2 }];
+
 export type WaveState = 'waiting' | 'active' | 'break';
 
 export interface WaveTuning { count: number; interval: number; speedMul: number; hpMul: number }

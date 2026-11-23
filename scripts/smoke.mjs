@@ -382,6 +382,7 @@ async function survival(browser) {
   await page.goto(`${BASE}?quality=desktop&autostart`);
   await waitReady(page);
   await page.waitForFunction(() => window.__SECTORZ__.state().waveState === 'active', null, { timeout: 60000 });
+  check('survival starts with the pistol only (⇄ locked)', (await state(page)).unlocked === 1 && (await state(page)).weapon === 'pistol');
   check('wave 1 starts with a banner', (await state(page)).wave === 1 && await page.evaluate(() => document.getElementById('banner').classList.contains('on')));
   await ticks(page, 240);
   check('wave zombies spawn', (await state(page)).zombiesAlive > 0, `alive=${(await state(page)).zombiesAlive}`);
@@ -397,6 +398,10 @@ async function survival(browser) {
   await page.evaluate(() => { const g = window.__SECTORZ__.game; g.pickups.spawn('ammo', g.player.x + 0.3, g.player.z); });
   await ticks(page, 10);
   check('walking over ammo adds SMG reserve', (await state(page)).smgReserve > before, `${before} → ${(await state(page)).smgReserve}`);
+  const gBefore = (await state(page)).grenades;
+  await page.evaluate(() => { const g = window.__SECTORZ__.game; g.pickups.spawn('grenade', g.player.x - 0.3, g.player.z); });
+  await ticks(page, 10);
+  check('walking over a grenade pickup adds a grenade', (await state(page)).grenades === Math.min(5, gBefore + 1), `${gBefore} → ${(await state(page)).grenades}`);
   await page.evaluate(() => { window.__SECTORZ__.game.player.health = 0; });
   await ticks(page, 10);
   const deadText = await page.evaluate(() => document.querySelector('#dead .kills').textContent);
