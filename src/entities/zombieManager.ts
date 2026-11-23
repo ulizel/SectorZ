@@ -63,11 +63,11 @@ export class ZombieManager {
   }
 
   /** Bullet hit on a zombie collider. */
-  hit(collider: RAPIER.Collider, damage: number, ix: number, iy: number, iz: number, px: number, py: number, pz: number, dt: number, limbMult = 1): ZombieHitResult | null {
+  hit(collider: RAPIER.Collider, damage: number, ix: number, iy: number, iz: number, px: number, py: number, pz: number, dt: number, limbMult = 1, flinch = 1): ZombieHitResult | null {
     const ref = this.byCollider.get(collider.handle);
     if (!ref) return null;
     const wasAlive = ref.z.alive;
-    const severed = ref.z.hit(ref.part, damage, ix, iy, iz, px, py, pz, dt, true, limbMult);
+    const severed = ref.z.hit(ref.part, damage, ix, iy, iz, px, py, pz, dt, true, limbMult, flinch);
     if (severed >= 0) this.addBleeders(ref.z, severed);
     return { zombie: ref.z, part: ref.part, severed, killed: wasAlive && !ref.z.alive };
   }

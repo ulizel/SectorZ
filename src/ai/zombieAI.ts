@@ -137,6 +137,9 @@ export class ZombieAI {
     b.alert -= dt;
     if (b.mode === 'chase' && (b.alert <= 0 || !t.alive)) b.mode = 'idle';
 
+    // Knockback from hits: driven back by the push velocity (walls respected).
+    const pv = Math.hypot(z.pushV.x, z.pushV.z);
+    if (pv > 0.02) this.move(z, z.pushV.x / pv, z.pushV.z / pv, pv * dt, dt);
     // The player can wade through: zombies get shoved aside instead of overlapping.
     if (dist < 0.55 && dist > 1e-4) this.move(z, -dx / dist, -dz / dist, (0.55 - dist) * 0.4, dt);
 
@@ -176,7 +179,7 @@ export class ZombieAI {
         z.speed = 0;
         return;
       }
-      speed = (crawler ? AI.crawlSpeed : z.baseSpeed) * z.speedMul;
+      speed = (crawler ? AI.crawlSpeed : z.baseSpeed) * z.speedMul * (1 - 0.35 * z.underFire); // pushing through fire is slow
       if (b.detourT > 0) { b.detourT -= dt; dirX = b.detourX; dirZ = b.detourZ; } // side-stepping an obstacle
       else if (b.walkClear) { dirX = dx / dist; dirZ = dz / dist; } // clear ground between us: straight at you
       else if (this.nav.flow(z.x, z.z, tmp)) { dirX = tmp.x; dirZ = tmp.z; }

@@ -53,6 +53,7 @@ const LIMB_COLLIDER_SCALE = 0.85;
 const CCD_PARTS = new Set<PartName>(['head', 'forearmL', 'forearmR', 'upperArmL', 'upperArmR']);
 
 export const ZOMBIE_MAX_HP = 100;
+const PART_IDX = Object.fromEntries(HUMANOID.map((d, i) => [d.name, i])) as Record<PartName, number>;
 /**
  * Animated (kinematic) zombie parts don't physically touch props: a kinematic body has infinite
  * strength and would drag crates along. The AI pushes props with a limited force instead.
@@ -76,7 +77,10 @@ export interface ZombiePart {
   /** Limp but still attached while alive (e.g. shattered shoulder). */
   dangling: boolean;
   prev: THREE.Vector3;
+  /** Visible flinch (spring-driven toward flinchTarget) and its velocity. */
   flinch: number;
+  flinchVel: number;
+  flinchTarget: number;
 }
 
 export interface Wound { part: number; local: THREE.Vector3 }
@@ -114,7 +118,15 @@ export class Zombie {
   private readonly getUpFrom: { p: THREE.Vector3; q: THREE.Quaternion }[] = [];
   private t = Math.random() * 10;
   private readonly w: RAPIER.World;
-  private stagger = new THREE.Vector3();
+  // ── Hit reactions (all spring-smoothed, see react()) ──
+  /** Whole-body sway: x = lean back(-)/forward(+), z = sideways; target, value, velocity. */
+  private readonly sway = { tx: 0, tz: 0, x: 0, z: 0, vx: 0, vz: 0 };
+  /** Knockback velocity (m/s, world); the AI moves the zombie by it (walls respected). */
+  readonly pushV = new THREE.Vector3();
+  /** Recent-hit heat: high under sustained fire → leans into the fire and slows. */
+  private heat = 0;
+  /** 0..1: being hosed by sustained fire. */
+  underFire = 0;
   // ── Locomotion / AI-facing state (set by the AI system each tick) ──
   /** Current ground speed (m/s); drives the walk cycle. */
   speed = 0;
@@ -158,7 +170,7 @@ export class Zombie {
       const hp = PART_DAMAGE[def.name].hp;
       this.parts.push({
         def, index: i, body, collider, joint: null, parent: def.parent ? HUMANOID.findIndex((p) => p.name === def.parent) : -1,
-        hp, maxHp: hp, severed: false, dynamic: false, dangling: false, prev: v.clone(), flinch: 0,
+        hp, maxHp: hp, severed: false, dynamic: false, dangling: false, prev: v.clone(), flinch: 0, flinchVel: 0, flinchTarget: 0,
       });
     });
     for (const p of this.parts) if (p.parent >= 0) p.joint = this.makeJoint(p);
@@ -203,14 +215,14 @@ export class Zombie {
   private animate(dt: number): void {
     this.t += dt;
     const t = this.t, p = this.pose.parts;
-    this.stagger.multiplyScalar(Math.exp(-6 * dt));
-    this.pose.root.position.set(this.x + this.stagger.x, 0, this.z + this.stagger.z);
+    this.react(dt);
+    this.pose.root.position.set(this.x, 0, this.z);
     this.pose.root.rotation.set(0, this.yaw, 0);
-    const fl = (n: PartName) => this.parts.length ? this.parts[HUMANOID.findIndex((d) => d.name === n)].flinch : 0;
-    for (const part of this.parts) part.flinch *= Math.exp(-7 * dt);
+    const fl = (n: PartName) => this.parts.length ? this.parts[PART_IDX[n]].flinch : 0;
     if (this.crawler) { this.animateCrawl(dt); return; }
-    // Big hits make the whole body reel back.
-    const reel = Math.min(0.6, this.stagger.length() * 2.5);
+    // Body sway from hits (lean away from the shots), plus leaning into sustained fire.
+    const reel = Math.max(0, -this.sway.x) * 0.6;
+    const lean = this.sway.x + this.underFire * 0.3;
     // Shambling walk: stride scales with speed, slight limp, arms bob.
     const move = Math.min(1, this.speed / 1.4);
     this.walkPhase += this.speed * dt * 3.2;
@@ -221,9 +233,9 @@ export class Zombie {
     const strike = ap > 1 ? Math.sin(Math.min(1, (ap - 1) * 2.5) * Math.PI) : 0;
     p.pelvis.position.y = 0.8 + Math.sin(t * 1.3) * 0.015 - Math.abs(Math.cos(ph)) * 0.04 * move;
     p.pelvis.rotation.set(0, Math.sin(t * 0.7) * 0.1 + sw * 0.15, Math.sin(t * 0.9) * 0.04 + Math.sin(ph) * 0.06 * move);
-    p.torso.rotation.set(0.35 + 0.1 * move + Math.sin(t * 1.1) * 0.05 - fl('torso') - fl('pelvis') * 0.5 - reel - wind * 0.3 + strike * 0.5,
-      0, Math.sin(t * 0.8) * 0.06 - sw * 0.08);
-    p.head.rotation.set(-0.25 + Math.sin(t * 1.7) * 0.08 - fl('head') * 1.5, Math.sin(t * 0.6) * 0.3, Math.sin(t * 0.9) * 0.15);
+    p.torso.rotation.set(0.35 + 0.1 * move + Math.sin(t * 1.1) * 0.05 - fl('torso') - fl('pelvis') * 0.5 + lean - wind * 0.3 + strike * 0.5,
+      0, Math.sin(t * 0.8) * 0.06 - sw * 0.08 + this.sway.z);
+    p.head.rotation.set(-0.25 + Math.sin(t * 1.7) * 0.08 - fl('head') * 1.5 + lean * 0.5 + this.underFire * 0.25, Math.sin(t * 0.6) * 0.3, Math.sin(t * 0.9) * 0.15 + this.sway.z * 0.6);
     const armBob = Math.sin(ph * 2) * 0.08 * move;
     p.upperArmL.rotation.set(-1.25 + Math.sin(t * 1.4) * 0.12 + fl('upperArmL') + reel + armBob - wind * 1.0 + strike * 0.6, -0.1, 0.05 + wind * 0.3);
     p.upperArmR.rotation.set(-1.15 + Math.sin(t * 1.2 + 1) * 0.12 + fl('upperArmR') + reel - armBob - wind * 1.0 + strike * 0.6, 0.1, -0.05 - wind * 0.3);
@@ -257,6 +269,31 @@ export class Zombie {
     p.shinL.rotation.set(0.2, 0, 0);
     p.shinR.rotation.set(0.2, 0, 0);
     this.pose.root.updateMatrixWorld(true);
+  }
+
+  /**
+   * Hit-reaction springs. Accumulated targets saturate (1 - e^-x: rapid hits hold a pose instead
+   * of stacking to extreme angles) and recover; visuals follow critically-damped springs (~0.1 s),
+   * so a burst blends into one push rather than a twitch per bullet.
+   */
+  private react(dt: number): void {
+    const SPRING = 220, DAMP = 2 * Math.sqrt(SPRING), RECOVER = Math.exp(-5 * dt);
+    const sat = (x: number, max: number) => Math.sign(x) * max * (1 - Math.exp(-Math.abs(x) / max));
+    for (const p of this.parts) {
+      p.flinchTarget *= RECOVER;
+      p.flinchVel += (SPRING * (sat(p.flinchTarget, 0.8) - p.flinch) - DAMP * p.flinchVel) * dt;
+      p.flinch += p.flinchVel * dt;
+    }
+    const s = this.sway;
+    s.tx *= RECOVER; s.tz *= RECOVER;
+    s.vx += (SPRING * (sat(s.tx, 0.5) - s.x) - DAMP * s.vx) * dt;
+    s.vz += (SPRING * (sat(s.tz, 0.35) - s.z) - DAMP * s.vz) * dt;
+    s.x += s.vx * dt; s.z += s.vz * dt;
+    this.pushV.multiplyScalar(Math.exp(-5 * dt));
+    this.heat *= Math.exp(-2 * dt);
+    // ≳5 hits/s counts as sustained fire; eased so the lean-in builds up instead of jumping per hit.
+    const uf = Math.min(1, Math.max(0, (this.heat - 2.5) / 3));
+    this.underFire += (uf - this.underFire) * (1 - Math.exp(-3 * dt));
   }
 
   /** Sim tick (before physics.step). */
@@ -426,7 +463,8 @@ export class Zombie {
     }
     this.state = 'gettingUp';
     this.getUpT = 0;
-    this.stagger.set(0, 0, 0);
+    this.pushV.set(0, 0, 0);
+    this.sway.tx = this.sway.tz = this.sway.x = this.sway.z = this.sway.vx = this.sway.vz = 0;
   }
 
   /** Tear a limb off: remove its joint; it and its children become free bodies. Returns false if not detachable. */
@@ -458,7 +496,7 @@ export class Zombie {
    * Apply a hit to part i. Returns which part was severed (or -1).
    * `ix,iy,iz` impulse (N·s); `px,py,pz` hit point; `wound` records a visible wound there.
    */
-  hit(i: number, damage: number, ix: number, iy: number, iz: number, px: number, py: number, pz: number, dt: number, wound = false, limbMult = 1): number {
+  hit(i: number, damage: number, ix: number, iy: number, iz: number, px: number, py: number, pz: number, dt: number, wound = false, limbMult = 1, flinch = 1): number {
     const p = this.parts[i];
     if (this.frozen) this.unfreeze();
     const dmg = PART_DAMAGE[p.def.name];
@@ -473,8 +511,17 @@ export class Zombie {
       this.hp -= damage * dmg.mult;
       if (wound) this.speedMul = Math.min(1.5, Math.max(this.minSpeedMul, this.speedMul - this.slowPerHit));
       if (this.state === 'alive' || this.state === 'gettingUp') {
-        p.flinch += Math.min(0.9, impulse * 0.05);
-        this.stagger.x += ix * 0.008; this.stagger.z += iz * 0.008;
+        // Spread the hit: ~40% into the struck limb, ~60% into a whole-body lean away from the
+        // shot; plus a damped knockback push. Targets accumulate, visuals follow via springs.
+        const k = impulse * 0.05 * flinch;
+        p.flinchTarget += k * 0.4;
+        const fx = Math.sin(this.yaw), fz = Math.cos(this.yaw);
+        const fwd = (ix * fx + iz * fz) / (impulse || 1); // + = pushed toward its front
+        const left = (ix * fz - iz * fx) / (impulse || 1); // + = pushed toward its left (+X local)
+        this.sway.tx += k * 0.6 * fwd;
+        this.sway.tz -= k * 0.6 * left;
+        this.pushV.x += ix * 0.05 * flinch; this.pushV.z += iz * 0.05 * flinch;
+        this.heat += 1;
       }
       if (this.hp <= 0) this.kill(dt);
     }

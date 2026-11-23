@@ -35,6 +35,8 @@ export interface WeaponDef {
   vSpread: number;
   /** Multiplier on damage dealt to a limb's own health (how fast it tears limbs off). */
   limbMult: number;
+  /** Hit-reaction strength on zombies (pistol: clear jolt per shot; SMG: small tremors that build). */
+  flinch: number;
 }
 
 export const WEAPONS: Record<string, WeaponDef> = {
@@ -43,7 +45,7 @@ export const WEAPONS: Record<string, WeaponDef> = {
     spread: 0.012, range: 40, impulse: 10, pellets: 1, automatic: false, shake: 0.2, recoil: 1,
     aimTurn: 9, settle: 3.5, recoilBloom: 1.2, aimKick: 0,
     recoilPattern: [0], penetration: 0.7, pushback: 0.9, activeWindow: [0.45, 0.62], casingSound: false, reserveStart: Infinity, reserveMax: Infinity,
-    bulletSpeed: 70, vSpread: 0.06, limbMult: 1,
+    bulletSpeed: 70, vSpread: 0.06, limbMult: 1, flinch: 1,
   },
   smg: {
     id: 'smg', name: 'SMG', damage: 14, fireInterval: 0.085, magSize: 30, reloadTime: 1.6,
@@ -51,7 +53,7 @@ export const WEAPONS: Record<string, WeaponDef> = {
     aimTurn: 6, settle: 2.5, recoilBloom: 0.35, aimKick: 0.006,
     recoilPattern: [0.012, 0.016, 0.014, 0.008, -0.004, -0.014, -0.018, -0.012, 0.002, 0.014, 0.018, 0.01],
     penetration: 0.45, pushback: 0.35, activeWindow: [0.5, 0.64], casingSound: false, reserveStart: 60, reserveMax: 180,
-    bulletSpeed: 80, vSpread: 0, limbMult: 1.6,
+    bulletSpeed: 80, vSpread: 0, limbMult: 1.6, flinch: 0.35,
   },
 };
 

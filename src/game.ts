@@ -347,7 +347,7 @@ export class Game {
     const power = Math.min(1, b.power / def.penetration + 0.3);
     const force = def.impulse * (penetrated ? 0.55 : 1) * power;
     const zr = material === 'flesh'
-      ? this.zombies.hit(hit.collider, def.damage * power, b.dx * force, force * 0.25, b.dz * force, ex, ey, ez, SIM_DT, def.limbMult)
+      ? this.zombies.hit(hit.collider, def.damage * power, b.dx * force, force * 0.25, b.dz * force, ex, ey, ez, SIM_DT, def.limbMult, def.flinch)
       : null;
     const dynamic = !!zr || (!!body && body.isDynamic());
     if (zr) {
