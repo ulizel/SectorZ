@@ -31,6 +31,8 @@ export const AIM = {
   arriveTolerance: 0.04,
   /** Aim ease-in (s): a new drag ramps the turn speed up over this long. */
   easeIn: 0.3,
+  /** Automatic weapons only fire when the aim is within this of the thumb direction (rad, ~10°). */
+  fireAlign: 0.17,
 };
 
 export const ARENA = { size: 44, wallHeight: 1.6 };

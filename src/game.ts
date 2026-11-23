@@ -190,7 +190,9 @@ export class Game {
       this.stickTarget = Math.atan2(raw.aimStick.x * sgn, raw.aimStick.y * sgn);
       this.stickMag = raw.stickReleased ? 1 : raw.aimStickMag;
       out.aiming = raw.stickAiming;
-      out.trigger = automatic && raw.stickFiring; // SMG: inner ring aims, outer ring fires
+      // SMG: inner area aims, outer ring fires — but only once the aim has caught up with the thumb
+      // (no spraying while the aim is still swinging round).
+      out.trigger = automatic && raw.stickFiring && this.aim.errorTo(this.stickTarget) < AIM.fireAlign;
       // Single-shot: lifting queues a shot that fires once the aim arrives (or after a short wait).
       if (!automatic && raw.stickReleased) this.pendingShot = { angle: this.stickTarget, t: AIM.pendingShotMax };
     } else if (raw.aimScreen && this.renderer.screenToGround(raw.aimScreen.x, raw.aimScreen.y, BULLET_HEIGHT, v3)) {

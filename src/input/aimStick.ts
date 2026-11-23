@@ -11,8 +11,8 @@
 export const AIM_DEADZONE = 0.3; // fraction of full stick deflection
 const DEADZONE_EXIT = 0.24; // small hysteresis so the line doesn't flicker at the edge
 /** Automatic weapons: push past this deflection to fire (inside it you only aim). */
-export const FIRE_ZONE = 0.75;
-const FIRE_ZONE_EXIT = 0.68;
+export const FIRE_ZONE = 0.92;
+const FIRE_ZONE_EXIT = 0.85;
 /** A touch shorter than this (s) that never left the deadzone counts as a tap-to-fire. */
 export const TAP_MAX = 0.25;
 
