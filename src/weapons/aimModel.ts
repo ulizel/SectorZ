@@ -11,11 +11,19 @@ import type { WeaponDef } from './weapon';
 export const AIM_GAIN = 8; // 1/s: turn rate per radian of remaining error
 export const AIM_MIN_RATE = 0.6; // rad/s floor so the last degrees still arrive
 export const MAX_BLOOM = 4;
+/** Steady-aim bonus: hold still for this long (s) to reach minimum spread. */
+export const STEADY_TIME = 0.5;
+/** Spread multiplier at full steadiness. */
+export const STEADY_BONUS = 0.45;
+/** Stance: movement bloom at full running speed (walking slowly costs proportionally less). */
+export const MOVE_BLOOM = 2.2;
 
 export class AimModel {
   angle = 0; // radians, atan2(x, z)
   bloom = 0; // extra spread multiplier: spread = def.spread * (1 + bloom)
   angularVel = 0;
+  /** 0..1: how settled the aim is (held still, not moving, not just fired). */
+  steady = 0;
 
   get x(): number { return Math.sin(this.angle); }
   get z(): number { return Math.cos(this.angle); }
@@ -43,15 +51,26 @@ export class AimModel {
 
   /** Update bloom from aim motion and movement (0..1 of top speed). */
   updateBloom(def: WeaponDef, moveFrac: number, dt: number): void {
-    const target = Math.min(MAX_BLOOM, this.angularVel * 0.35 + moveFrac * 1.2);
+    // Stance: standing is accurate, walking widens, running is worst (quadratic: slow walk is cheap).
+    const target = Math.min(MAX_BLOOM, this.angularVel * 0.35 + moveFrac * moveFrac * MOVE_BLOOM);
     const rate = target > this.bloom ? 10 : def.settle; // blooms fast, settles at weapon rate
     this.bloom += (target - this.bloom) * (1 - Math.exp(-rate * dt));
+    // Steady-aim: build up while still and settled, lose it instantly on movement/turning.
+    const still = this.angularVel < 0.08 && moveFrac < 0.05 && this.bloom < 0.25;
+    this.steady = still ? Math.min(1, this.steady + dt / STEADY_TIME) : 0;
   }
 
-  onShot(def: WeaponDef, rand: () => number = Math.random): void {
+  /** `burstIndex`: 1-based shot number in the current burst (selects the recoil-pattern step). */
+  onShot(def: WeaponDef, burstIndex = 1, rand: () => number = Math.random): void {
     this.bloom = Math.min(MAX_BLOOM, this.bloom + def.recoilBloom);
-    this.angle += (rand() * 2 - 1) * def.aimKick; // recoil jolts the aim; the stick pulls it back
+    this.steady = 0;
+    const pat = def.recoilPattern;
+    const kick = pat[(burstIndex - 1) % pat.length] + (rand() * 2 - 1) * def.aimKick;
+    this.angle += kick; // learnable pattern + a little noise; the stick pulls it back
   }
 
-  spread(def: WeaponDef): number { return def.spread * (1 + this.bloom); }
+  spread(def: WeaponDef): number {
+    const steadyMul = 1 - (1 - STEADY_BONUS) * this.steady;
+    return def.spread * (1 + this.bloom) * steadyMul;
+  }
 }

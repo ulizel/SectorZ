@@ -169,3 +169,41 @@ export class MuzzleFlash {
     if (this.life <= 0) { this.flash.visible = false; this.light.intensity = 0; }
   }
 }
+
+/** Pooled bullet-hole decals on static surfaces; they fade out after a while. */
+export class BulletHoles {
+  private readonly pool: { mesh: THREE.Mesh; life: number }[] = [];
+  private next = 0;
+  private static readonly LIFE = 10;
+
+  constructor(scene: THREE.Scene, count = 40) {
+    const geo = new THREE.PlaneGeometry(0.09, 0.09);
+    for (let i = 0; i < count; i++) {
+      const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0x1a1714, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 }));
+      mesh.visible = false;
+      scene.add(mesh);
+      this.pool.push({ mesh, life: 0 });
+    }
+  }
+
+  add(x: number, y: number, z: number, nx: number, ny: number, nz: number): void {
+    const h = this.pool[this.next];
+    this.next = (this.next + 1) % this.pool.length;
+    h.mesh.position.set(x + nx * 0.01, y + ny * 0.01, z + nz * 0.01);
+    h.mesh.lookAt(x + nx, y + ny, z + nz);
+    h.mesh.rotateZ(Math.random() * Math.PI);
+    const s = 0.8 + Math.random() * 0.5;
+    h.mesh.scale.set(s, s, 1);
+    h.mesh.visible = true;
+    h.life = BulletHoles.LIFE;
+  }
+
+  update(dt: number): void {
+    for (const h of this.pool) {
+      if (h.life <= 0) continue;
+      h.life -= dt;
+      (h.mesh.material as THREE.MeshBasicMaterial).opacity = Math.min(0.85, h.life / 2);
+      if (h.life <= 0) h.mesh.visible = false;
+    }
+  }
+}

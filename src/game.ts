@@ -8,10 +8,10 @@ import { Sfx } from './audio/sfx';
 import { emptyCommand, type InputCommand, type RawInput } from './input/commands';
 import { InputManager } from './input/inputManager';
 import { Player } from './entities/player';
-import { Group, groups, ALL, PhysicsWorld } from './physics/physicsWorld';
+import { Group, groups, ALL, PhysicsWorld, MATERIAL_COST } from './physics/physicsWorld';
 import { Renderer } from './render/renderer';
 import { HumanoidRig, SURVIVOR_LOOK } from './render/humanoidRig';
-import { MuzzleFlash, ParticleSystem, Tracers } from './render/effects';
+import { BulletHoles, MuzzleFlash, ParticleSystem, Tracers } from './render/effects';
 import { buildArena, type DynamicProp } from './world/arena';
 import { Hud } from './ui/hud';
 import { DebugOverlay } from './ui/debugOverlay';
@@ -64,7 +64,12 @@ export class Game {
   private visYaw = 0;
   private time = 0;
   private readonly weaponEvents: WeaponEvent[] = [];
-  readonly stats = { shots: 0, hits: 0, ticks: 0, maxImpactSpeed: 0 };
+  readonly stats = { shots: 0, hits: 0, ticks: 0, maxImpactSpeed: 0, penetrations: 0, activeReloads: 0 };
+  private readonly penSkip = new Set<number>();
+  private readonly holes: BulletHoles;
+  private readonly hitMarker = document.getElementById('hitmarker')!;
+  private hitMarkerT = 0;
+  private readonly retMat: THREE.MeshBasicMaterial;
 
   constructor(container: HTMLElement, touchLayer: HTMLElement, reloadBtn: HTMLElement, switchBtn: HTMLElement, readonly quality: QualityPreset) {
     this.renderer = new Renderer(container, quality);
@@ -80,6 +85,7 @@ export class Game {
     this.debris = new ParticleSystem(quality.maxSparks + quality.maxCasings, { shadows: false });
     this.tracers = new Tracers(scene);
     this.flash = new MuzzleFlash(scene);
+    this.holes = new BulletHoles(scene);
     scene.add(this.sparks.mesh, this.debris.mesh);
 
     // Aim line + reticle. Touch: shown only while the aim stick is past its deadzone.
@@ -90,6 +96,7 @@ export class Game {
     this.aimLine.visible = false;
     this.reticle = new THREE.Group();
     const retMat = new THREE.MeshBasicMaterial({ color: 0xff5a3c, transparent: true, opacity: 0.9, depthWrite: false, toneMapped: false, side: THREE.DoubleSide });
+    this.retMat = retMat;
     this.reticle.add(new THREE.Mesh(new THREE.RingGeometry(0.07, 0.09, 16).rotateX(-Math.PI / 2), retMat));
     for (let i = 0; i < 4; i++) {
       const tick = new THREE.Mesh(new THREE.PlaneGeometry(0.02, 0.05).rotateX(-Math.PI / 2).translate(0, 0, 0.12), retMat);
@@ -197,36 +204,56 @@ export class Game {
       else if (e === 'reloadStart') this.events.emit('reloadStart', { weapon: w, time: this.player.weapon.def.reloadTime });
       else if (e === 'reloadEnd') this.events.emit('reloadEnd', { weapon: w });
       else if (e === 'dry') this.events.emit('dryFire', { weapon: w });
+      else if (e === 'activeReload') { this.stats.activeReloads++; this.events.emit('activeReload', { weapon: w, success: true }); }
+      else if (e === 'reloadFumble') this.events.emit('activeReload', { weapon: w, success: false });
     }
     this.physics.step();
   }
 
   private fire(): void {
     const p = this.player, def = p.weapon.def;
-    const spread = this.aim.spread(def); // accuracy depends on movement, turning and recoil
+    const spread = this.aim.spread(def); // accuracy depends on stance, turning, recoil, steadiness
+    const filter = groups(Group.PLAYER, ALL & ~Group.PLAYER & ~Group.DEBRIS);
     for (let i = 0; i < def.pellets; i++) {
       // Gaussian-ish spread (sum of two uniforms): most shots near the centre, few at the edge.
       const a = this.aim.angle + ((Math.random() + Math.random()) - 1) * spread;
       const dx = Math.sin(a), dz = Math.cos(a);
       this.stats.shots++;
-      const hit = this.physics.raycast(p.x, BULLET_HEIGHT, p.z, dx, 0, dz, def.range,
-        groups(Group.PLAYER, ALL & ~Group.PLAYER & ~Group.DEBRIS), p.collider);
+      // Penetration: the bullet keeps going through soft materials while it has power left.
+      let power = def.penetration;
+      let ox = p.x, oz = p.z, travelled = 0;
       let ex = p.x + dx * def.range, ez = p.z + dz * def.range, ey = BULLET_HEIGHT;
-      if (hit) {
+      this.penSkip.clear();
+      for (let seg = 0; seg < 4; seg++) {
+        const hit = this.physics.raycast(ox, BULLET_HEIGHT, oz, dx, 0, dz, def.range - travelled, filter, p.collider, this.penSkip);
+        if (!hit) { ex = ox + dx * (def.range - travelled); ez = oz + dz * (def.range - travelled); break; }
         ex = hit.point.x; ey = hit.point.y; ez = hit.point.z;
+        const material = this.physics.materialOf(hit.collider);
+        const cost = MATERIAL_COST[material];
+        const penetrated = power >= cost;
         const body = hit.collider.parent();
         const dynamic = !!body && body.isDynamic();
+        // Force scales with the bullet's remaining power (a bullet that punches through transfers less).
+        const force = def.impulse * (penetrated ? 0.55 : 1) * Math.min(1, power / def.penetration + 0.3);
         if (dynamic) {
           this.stats.hits++;
-          body!.applyImpulseAtPoint({ x: dx * def.impulse, y: def.impulse * 0.15, z: dz * def.impulse }, hit.point, true);
+          body!.applyImpulseAtPoint({ x: dx * force, y: force * 0.15, z: dz * force }, hit.point, true);
           const v = body!.linvel();
           this.stats.maxImpactSpeed = Math.max(this.stats.maxImpactSpeed, Math.hypot(v.x, v.y, v.z));
         }
-        this.events.emit('hit', { x: ex, y: ey, z: ez, nx: hit.normal.x, ny: hit.normal.y, nz: hit.normal.z, dynamic });
+        this.events.emit('hit', { x: ex, y: ey, z: ez, nx: hit.normal.x, ny: hit.normal.y, nz: hit.normal.z, dynamic, material, penetrated });
+        if (!penetrated) break;
+        this.stats.penetrations++;
+        power -= cost;
+        this.penSkip.add(hit.collider.handle);
+        travelled += hit.toi;
+        ox = ex; oz = ez;
       }
       this.events.emit('shot', { x: ex, y: ey, z: ez, dx, dz, weapon: def.id });
+      // Recoil shoves the shooter back a little (decays through the movement controller).
+      p.vx -= dx * def.pushback; p.vz -= dz * def.pushback;
     }
-    this.aim.onShot(def);
+    this.aim.onShot(def, p.weapon.burst);
   }
 
   // ───────────────────────────── presentation ─────────────────────────────
@@ -262,6 +289,12 @@ export class Game {
     // Reticle size shows current accuracy at that distance.
     const s = Math.max(0.8, Math.min(1.6, (spread * len) / 0.1)) * (1 + 0.05 * Math.sin(this.time * 10));
     this.reticle.scale.set(s, s, s);
+    if (this.hitMarkerT > 0) {
+      v3.copy(this.reticle.position).project(this.renderer.camera);
+      this.hitMarker.style.transform = `translate(${(v3.x + 1) / 2 * innerWidth}px, ${(1 - v3.y) / 2 * innerHeight}px)`;
+    }
+    // Steady-aim: reticle shifts from red to bright white as the shot settles.
+    this.retMat.color.setRGB(1, 0.35 + 0.65 * this.aim.steady, 0.24 + 0.76 * this.aim.steady);
   }
 
   private wireEffects(): void {
@@ -272,34 +305,65 @@ export class Game {
       // SMG: every 3rd round blooms a bigger flash so sustained fire flickers like a real muzzle.
       const big = def.automatic && this.stats.shots % 3 === 0;
       this.flash.fire(v3, this.visYaw, def.automatic ? (big ? 1.6 : 0.8) : 1);
-      this.tracers.spawn(v3, v3b.set(e.x, e.y, e.z));
+      // Tracers: every pistol round, every 3rd SMG round (like real tracer ammo loading).
+      if (!def.automatic || big) this.tracers.spawn(v3, v3b.set(e.x, e.y, e.z));
       this.recoil = Math.min(1, this.recoil + def.recoil);
       this.renderer.addShake(def.shake);
       if (def.id === 'smg') this.sfx.smgShot(); else this.sfx.gunshot();
       this.sfx.casing();
-      // Ejected brass casing flies out to the right.
+      // Muzzle smoke: slow grey puffs drifting up.
+      for (let i = 0; i < (def.automatic ? 1 : 3); i++) {
+        this.debris.emit(v3.x + e.dx * 0.1, v3.y, v3.z + e.dz * 0.1,
+          e.dx * 0.8 + (Math.random() - 0.5) * 0.4, 0.4 + Math.random() * 0.3, e.dz * 0.8 + (Math.random() - 0.5) * 0.4,
+          0.1 + Math.random() * 0.08, 0.7 + Math.random() * 0.4, 0x8b8f94, 0, -0.6, 2.5, 2);
+      }
+      // Ejected brass casing flies out to the right and stays on the ground a while.
       const rx = -Math.cos(this.visYaw), rz = Math.sin(this.visYaw);
       this.debris.emit(v3.x - e.dx * 0.25, v3.y + 0.05, v3.z - e.dz * 0.25,
         rx * (2 + Math.random()) - e.dx, 2.5 + Math.random() * 1.5, rz * (2 + Math.random()) - e.dz,
-        0.05, 2.5, 0xd9a441, 0.45, 14, 0.8, 30);
+        0.05, 6, 0xd9a441, 0.45, 14, 0.8, 30);
     });
     ev.on('hit', (e) => {
-      // Sparks spray along the surface normal, plus chunky dust/splinters.
-      for (let i = 0; i < 7; i++) {
+      const m = e.material;
+      // Sparks: lots on metal, a few on concrete, none on wood (splinters instead).
+      const sparks = m === 'metal' ? 12 : m === 'concrete' ? 5 : 0;
+      for (let i = 0; i < sparks; i++) {
         this.sparks.emit(e.x, e.y, e.z,
           e.nx * 4 + (Math.random() - 0.5) * 5, e.ny * 4 + Math.random() * 3, e.nz * 4 + (Math.random() - 0.5) * 5,
-          0.035, 0.18 + Math.random() * 0.15, 0xffc060, 0.3, 18, 2);
+          0.035, 0.18 + Math.random() * 0.15, m === 'metal' ? 0xffe08a : 0xffc060, 0.3, 18, 2);
       }
-      const color = e.dynamic ? 0x8a5a2e : 0x9a968e;
-      for (let i = 0; i < 5; i++) {
+      const color = m === 'wood' ? 0x9a6a38 : m === 'metal' ? 0x5d6168 : 0x9a968e;
+      const chunks = m === 'wood' ? 9 : 5;
+      for (let i = 0; i < chunks; i++) {
         this.debris.emit(e.x, e.y, e.z,
           e.nx * 2.5 + (Math.random() - 0.5) * 2.5, 1 + Math.random() * 2.5, e.nz * 2.5 + (Math.random() - 0.5) * 2.5,
-          0.05 + Math.random() * 0.06, 0.8 + Math.random() * 0.6, color, 0.3, 12, 1.2);
+          (m === 'wood' ? 0.04 : 0.05) + Math.random() * 0.06, 0.8 + Math.random() * 0.6, color, 0.3, 12, 1.2);
       }
-      this.sfx.impact(!e.dynamic);
+      // Dust puff on concrete.
+      if (m === 'concrete') {
+        for (let i = 0; i < 3; i++) this.debris.emit(e.x, e.y, e.z, e.nx * 0.8 + (Math.random() - 0.5) * 0.6, 0.3 + Math.random() * 0.4,
+          e.nz * 0.8 + (Math.random() - 0.5) * 0.6, 0.12 + Math.random() * 0.08, 0.6, 0xb0aba2, 0, -0.3, 3, 2);
+      }
+      if (!e.dynamic) this.holes.add(e.x, e.y, e.z, e.nx, e.ny, e.nz);
+      this.sfx.impact(m);
+      if (e.dynamic) {
+        // Hit confirmation: marker on the reticle + a small camera punch.
+        this.hitMarker.classList.remove('on');
+        void this.hitMarker.offsetWidth; // restart the CSS pop animation
+        this.hitMarker.classList.add('on');
+        this.hitMarkerT = 0.15;
+        this.renderer.addShake(0.08);
+      }
     });
-    ev.on('reloadStart', () => this.sfx.reloadStart());
+    ev.on('reloadStart', () => {
+      this.sfx.reloadStart();
+      // Empty magazine drops out of the gun.
+      this.rig.muzzle.getWorldPosition(v3);
+      this.debris.emit(v3.x, v3.y - 0.1, v3.z, (Math.random() - 0.5) * 0.6, -0.5, (Math.random() - 0.5) * 0.6,
+        0.09, 5, 0x2b2d31, 0.25, 14, 0.8, 6);
+    });
     ev.on('reloadEnd', () => this.sfx.reloadEnd());
+    ev.on('activeReload', (e) => this.sfx.activeReload(e.success));
     ev.on('dryFire', () => this.sfx.dry());
   }
 
@@ -315,7 +379,7 @@ export class Game {
     const moveAmt = Math.min(1, speed / PLAYER.moveSpeed);
     const strafe = speed > 0.1 ? angleDelta(this.visYaw, Math.atan2(p.vx, p.vz)) : 0;
     this.recoil *= Math.exp(-14 * frameDt);
-    this.rig.pose(p.walkPhase, moveAmt, strafe, this.recoil, this.time);
+    this.rig.pose(p.walkPhase, moveAmt, strafe, this.recoil, this.time, p.weapon.reloadProgress);
 
     this.marker.position.x = x; this.marker.position.z = z;
     this.updateAimLine(x, z);
@@ -328,6 +392,8 @@ export class Game {
 
     this.flash.update(frameDt);
     this.tracers.update(frameDt);
+    this.holes.update(frameDt);
+    if (this.hitMarkerT > 0) { this.hitMarkerT -= frameDt; if (this.hitMarkerT <= 0) this.hitMarker.classList.remove('on'); }
     this.sparks.update(frameDt);
     this.debris.update(frameDt);
     this.renderer.updateCamera(x, z, this.aimX, this.aimZ, frameDt);
@@ -356,7 +422,8 @@ export class Game {
       ammo: p.weapon.ammo, reloading: p.weapon.reloading, weapon: p.weapon.def.id,
       aimLineVisible: this.aimLineVisible, aimX: this.aimX, aimZ: this.aimZ, bloom: this.aim.bloom,
       shots: this.stats.shots, propHits: this.stats.hits, ticks: this.stats.ticks,
-      maxPropMove, maxImpactSpeed: this.stats.maxImpactSpeed,
+      maxPropMove, maxImpactSpeed: this.stats.maxImpactSpeed, penetrations: this.stats.penetrations,
+      activeReloads: this.stats.activeReloads, steady: this.aim.steady,
       fps: this.debug.fps, physicsMs: this.debug.avgPhysicsMs,
       bodies: this.physics.bodyCount,
     };

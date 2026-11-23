@@ -18,6 +18,12 @@ export interface WeaponDef {
   settle: number; // how fast accuracy recovers when steady, 1/s
   recoilBloom: number; // accuracy lost per shot
   aimKick: number; // random aim jolt per shot, radians (felt recoil)
+  /** Learnable spray pattern: aim jolt per consecutive shot (radians, + = clockwise). Repeats. */
+  recoilPattern: number[];
+  penetration: number; // material "power" a bullet can spend passing through things
+  pushback: number; // m/s the shooter is shoved backwards per shot
+  /** Active-reload sweet spot as a fraction of reload progress [start, end]. */
+  activeWindow: [number, number];
 }
 
 export const WEAPONS: Record<string, WeaponDef> = {
@@ -25,15 +31,18 @@ export const WEAPONS: Record<string, WeaponDef> = {
     id: 'pistol', name: 'Pistol', damage: 25, fireInterval: 0.2, magSize: 12, reloadTime: 1.1,
     spread: 0.012, range: 40, impulse: 10, pellets: 1, automatic: false, shake: 0.2, recoil: 1,
     aimTurn: 9, settle: 3.5, recoilBloom: 1.2, aimKick: 0,
+    recoilPattern: [0], penetration: 0.7, pushback: 0.9, activeWindow: [0.45, 0.62],
   },
   smg: {
     id: 'smg', name: 'SMG', damage: 14, fireInterval: 0.085, magSize: 30, reloadTime: 1.6,
     spread: 0.03, range: 32, impulse: 6, pellets: 1, automatic: true, shake: 0.1, recoil: 0.55,
-    aimTurn: 6, settle: 2.5, recoilBloom: 0.35, aimKick: 0.018,
+    aimTurn: 6, settle: 2.5, recoilBloom: 0.35, aimKick: 0.006,
+    recoilPattern: [0.012, 0.016, 0.014, 0.008, -0.004, -0.014, -0.018, -0.012, 0.002, 0.014, 0.018, 0.01],
+    penetration: 0.45, pushback: 0.35, activeWindow: [0.5, 0.64],
   },
 };
 
-export type WeaponEvent = 'fired' | 'reloadStart' | 'reloadEnd' | 'dry';
+export type WeaponEvent = 'fired' | 'reloadStart' | 'reloadEnd' | 'dry' | 'activeReload' | 'reloadFumble';
 
 /** A single-shot tap arriving slightly early (during cooldown) is remembered this long. */
 const TAP_BUFFER = 0.15;
@@ -43,6 +52,11 @@ export class WeaponState {
   cooldown = 0;
   reloadLeft = 0;
   private tapBuffer = 0;
+  /** One active-reload attempt per reload. */
+  activeTried = false;
+  /** Shots fired in the current burst (drives the recoil pattern). */
+  burst = 0;
+  private sinceShot = 99;
   private dryCooldown = 0;
 
   constructor(readonly def: WeaponDef) {
@@ -50,7 +64,7 @@ export class WeaponState {
   }
 
   get reloading(): boolean { return this.reloadLeft > 0; }
-  get reloadProgress(): number { return this.reloading ? 1 - this.reloadLeft / this.def.reloadTime : 0; }
+  get reloadProgress(): number { return this.reloading ? Math.max(0, 1 - this.reloadLeft / this.def.reloadTime) : 0; }
 
   /** Abort an in-progress reload (e.g. when switching weapons). */
   cancelReload(): void { this.reloadLeft = 0; this.tapBuffer = 0; }
@@ -65,6 +79,8 @@ export class WeaponState {
     // Cooldown may go slightly negative: that remainder carries into the next shot so fire
     // rates are exact even when the interval isn't a multiple of the 60 Hz tick.
     this.cooldown -= dt;
+    this.sinceShot += dt;
+    if (this.sinceShot > 0.3) this.burst = 0; // pause resets the spray pattern
     this.dryCooldown = Math.max(0, this.dryCooldown - dt);
     this.tapBuffer = tap ? TAP_BUFFER : Math.max(0, this.tapBuffer - dt);
 
@@ -75,6 +91,7 @@ export class WeaponState {
         this.ammo = this.def.magSize;
         out.push('reloadEnd');
       }
+      else if (reloadRequest && !this.activeTried) this.tryActiveReload(out);
     } else if (reloadRequest && this.ammo < this.def.magSize) {
       this.startReload(out);
     }
@@ -94,6 +111,8 @@ export class WeaponState {
     }
     this.ammo--;
     this.cooldown = Math.max(this.cooldown, -dt) + this.def.fireInterval;
+    this.burst++;
+    this.sinceShot = 0;
     out.push('fired');
     if (this.ammo === 0) this.startReload(out);
   }
@@ -101,6 +120,22 @@ export class WeaponState {
   private startReload(out: WeaponEvent[]): void {
     if (this.reloading) return;
     this.reloadLeft = this.def.reloadTime;
+    this.activeTried = false;
     out.push('reloadStart');
+  }
+
+  /** Reload pressed again mid-reload: inside the sweet spot = instant finish, outside = fumble (+0.5 s). */
+  private tryActiveReload(out: WeaponEvent[]): void {
+    this.activeTried = true;
+    const p = this.reloadProgress;
+    const [a, b] = this.def.activeWindow;
+    if (p >= a && p <= b) {
+      this.reloadLeft = 0;
+      this.ammo = this.def.magSize;
+      out.push('activeReload', 'reloadEnd');
+    } else {
+      this.reloadLeft += 0.5;
+      out.push('reloadFumble');
+    }
   }
 }

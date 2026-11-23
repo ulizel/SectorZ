@@ -54,11 +54,29 @@ describe('AimModel', () => {
     expect(a.spread(def)).toBeLessThan(def.spread * 1.1);
   });
 
-  it('SMG recoil jolts the aim, pistol does not', () => {
+  it('SMG follows its learnable recoil pattern; pistol does not jolt', () => {
     const a = new AimModel();
-    a.onShot(WEAPONS.pistol, () => 1);
+    a.onShot(WEAPONS.pistol, 1, () => 0.5);
     expect(a.angle).toBe(0);
-    a.onShot(WEAPONS.smg, () => 1);
-    expect(a.angle).toBeCloseTo(WEAPONS.smg.aimKick);
+    const pat = WEAPONS.smg.recoilPattern;
+    let expected = 0;
+    for (let i = 1; i <= 5; i++) { a.onShot(WEAPONS.smg, i, () => 0.5); expected += pat[i - 1]; }
+    expect(a.angle).toBeCloseTo(expected);
+  });
+
+  it('stance: running is much less accurate than walking slowly', () => {
+    const walk = new AimModel(), run = new AimModel();
+    for (let i = 0; i < 60; i++) { walk.updateBloom(WEAPONS.pistol, 0.3, DT); run.updateBloom(WEAPONS.pistol, 1, DT); }
+    expect(run.spread(WEAPONS.pistol)).toBeGreaterThan(walk.spread(WEAPONS.pistol) * 1.8);
+  });
+
+  it('steady-aim bonus: holding still for 0.5 s tightens spread, shooting resets it', () => {
+    const a = new AimModel();
+    const def = WEAPONS.pistol;
+    for (let i = 0; i < 40; i++) { a.hold(DT); a.updateBloom(def, 0, DT); }
+    expect(a.steady).toBe(1);
+    expect(a.spread(def)).toBeLessThan(def.spread * 0.5);
+    a.onShot(def);
+    expect(a.steady).toBe(0);
   });
 });

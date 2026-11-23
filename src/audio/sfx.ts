@@ -73,7 +73,18 @@ export class Sfx {
     this.burst(0.03, 5000, 0.6, 0.35, 'highpass');
     this.tone(95 + Math.random() * 15, 38, 0.11, 1.0);
   }
-  impact(hard: boolean): void { this.burst(hard ? 0.06 : 0.09, hard ? 2400 : 900, 1.5, 0.25, 'bandpass'); }
+  /** Material-specific impact: concrete = dry crack, wood = dull thock, metal = ringing ping. */
+  impact(m: 'concrete' | 'wood' | 'metal'): void {
+    if (m === 'concrete') { this.burst(0.06, 2400, 1.5, 0.28, 'bandpass'); return; }
+    if (m === 'wood') { this.burst(0.08, 700, 2, 0.35, 'bandpass'); this.tone(220, 120, 0.06, 0.15, 'triangle'); return; }
+    this.burst(0.03, 5000, 3, 0.2, 'bandpass');
+    this.tone(1800 + Math.random() * 600, 1500, 0.25, 0.12, 'sine');
+  }
+  /** Active reload: bright double click on success, dull clunk on a fumble. */
+  activeReload(success: boolean): void {
+    if (success) { this.tone(1400, 1600, 0.05, 0.18, 'square'); this.tone(2000, 2100, 0.06, 0.15, 'square', 0.06); }
+    else { this.burst(0.12, 400, 2, 0.4, 'bandpass'); }
+  }
   dry(): void { this.burst(0.03, 4000, 4, 0.3, 'bandpass'); }
   reloadStart(): void { this.burst(0.05, 1800, 6, 0.35, 'bandpass'); this.burst(0.04, 1200, 6, 0.3, 'bandpass', 0.12); }
   reloadEnd(): void { this.burst(0.05, 2500, 6, 0.4, 'bandpass'); this.tone(900, 700, 0.04, 0.12, 'square', 0.05); }

@@ -45,8 +45,21 @@ html, body {
 #weapon-name { font-size: 11px; letter-spacing: 2px; opacity: 0.75; }
 #ammo { font-size: 30px; font-weight: 700; line-height: 1.05; }
 #ammo.low { color: #ff7a5c; }
-#reload { height: 4px; width: 100%; background: rgba(255,255,255,0.15); margin-top: 4px; opacity: 0; transition: opacity 0.1s; }
-#reload-bar { height: 100%; width: 0; background: var(--ink); }
+#reload { position: relative; height: 8px; width: 100%; min-width: 90px; background: rgba(255,255,255,0.15); margin-top: 5px; opacity: 0; transition: opacity 0.1s; }
+#reload-bar { position: relative; height: 100%; width: 0; background: var(--ink); }
+/* Active reload sweet spot: press reload again while the bar is inside it. */
+#reload-sweet { position: absolute; top: -2px; bottom: -2px; background: rgba(255, 200, 60, 0.75); }
+#reload-sweet.used { opacity: 0.15; }
+#reload.perfect #reload-bar { background: #ffd34a; }
+#reload.fumble #reload-bar { background: #ff6a4a; }
+#hitmarker { position: absolute; left: -11px; top: -11px; width: 22px; height: 22px; opacity: 0; pointer-events: none; }
+#hitmarker.on { animation: hitpop 0.15s ease-out; }
+#hitmarker i { position: absolute; left: 10px; top: 0; width: 2px; height: 6px; background: #fff; box-shadow: 0 0 2px #000; }
+#hitmarker i:nth-child(1) { transform: rotate(45deg) translate(0, -4px); transform-origin: 1px 11px; }
+#hitmarker i:nth-child(2) { transform: rotate(135deg) translate(0, -4px); transform-origin: 1px 11px; }
+#hitmarker i:nth-child(3) { transform: rotate(225deg) translate(0, -4px); transform-origin: 1px 11px; }
+#hitmarker i:nth-child(4) { transform: rotate(315deg) translate(0, -4px); transform-origin: 1px 11px; }
+@keyframes hitpop { 0% { opacity: 1; scale: 1.4; } 100% { opacity: 0; scale: 1; } }
 #reload-btn { display: none; position: absolute; pointer-events: auto; right: max(14px, env(safe-area-inset-right));
   bottom: calc(max(14px, env(safe-area-inset-bottom)) + 84px); width: 54px; height: 54px; border-radius: 50%;
   border: 2px solid rgba(255,255,255,0.4); background: var(--panel); color: var(--ink); font: 700 18px var(--font); }

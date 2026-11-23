@@ -59,7 +59,7 @@ export class HumanoidRig {
    * Procedural animation. `phase` advances with distance walked; `move` is 0..1 speed;
    * `strafe` is the movement direction relative to facing (radians); `recoil` 0..1 kick.
    */
-  pose(phase: number, move: number, strafe: number, recoil: number, time: number): void {
+  pose(phase: number, move: number, strafe: number, recoil: number, time: number, reload = 0): void {
     const p = this.parts;
     const swing = Math.sin(phase) * 0.75 * move;
     // Legs swing along the movement direction relative to the body.
@@ -71,15 +71,20 @@ export class HumanoidRig {
     // Bob + breathe.
     const bob = Math.abs(Math.cos(phase)) * 0.05 * move;
     p.pelvis.position.y = 0.82 - 0.03 * move + bob;
-    p.torso.rotation.set(0.08 * move + Math.sin(time * 2) * 0.015, 0, 0);
+    // Recoil rocks the whole upper body back, not just the arms.
+    p.torso.rotation.set(0.08 * move + Math.sin(time * 2) * 0.015 - recoil * 0.12, 0, recoil * 0.03);
     p.head.rotation.set(-0.08 * move, 0, 0);
     // Two-handed aim: arms forward, converging on the gun.
-    const kick = recoil * 0.35;
-    p.upperArmR.rotation.set(-Math.PI / 2 + 0.22 - kick, 0.42, 0);
-    p.forearmR.rotation.set(0, 0, 0);
-    p.upperArmL.rotation.set(-Math.PI / 2 + 0.37 - kick * 0.6, -0.75, 0);
-    p.forearmL.rotation.set(-0.35, 0, 0);
-    p.torso.position.z = -kick * 0.06;
+    const kick = recoil * 0.5;
+    // Reload: gun tilts in toward the chest, support hand drops to the belt and comes back with a mag.
+    const r = Math.sin(Math.min(1, reload) * Math.PI); // 0 → 1 → 0 over the reload
+    const dip = reload > 0 ? Math.sin(Math.min(1, reload) * Math.PI * 2) : 0;
+    p.upperArmR.rotation.set(-Math.PI / 2 + 0.22 - kick + r * 0.55, 0.42 + r * 0.35, 0);
+    p.forearmR.rotation.set(-kick * 0.6 - r * 0.5, 0, r * 0.5);
+    p.upperArmL.rotation.set(-Math.PI / 2 + 0.37 - kick * 0.6 + r * (1.0 + dip * 0.6), -0.75 + r * 0.5, 0);
+    p.forearmL.rotation.set(-0.35 - r * 0.8, 0, 0);
+    p.torso.position.z = -kick * 0.09;
+    p.head.rotation.x += r * 0.35; // glance down at the gun
   }
 }
 

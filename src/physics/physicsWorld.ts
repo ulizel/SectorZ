@@ -24,6 +24,11 @@ export const Group = {
 export const ALL = 0xffff;
 export const groups = (member: number, filter: number) => ((member & 0xffff) << 16) | (filter & 0xffff);
 
+/** Surface material: drives bullet penetration, impact effects and sounds. */
+export type Material = 'concrete' | 'wood' | 'metal';
+/** Penetration power a bullet spends passing through each material (Infinity = always stops). */
+export const MATERIAL_COST: Record<Material, number> = { wood: 0.35, metal: 0.9, concrete: Infinity };
+
 export interface RayHit {
   collider: RAPIER.Collider;
   toi: number;
@@ -34,6 +39,8 @@ export interface RayHit {
 export class PhysicsWorld {
   readonly world: RAPIER.World;
   lastStepMs = 0;
+  /** Collider handle → material (default concrete). */
+  readonly materials = new Map<number, Material>();
 
   constructor() {
     this.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
@@ -48,9 +55,10 @@ export class PhysicsWorld {
 
   /** Hitscan ray. `filterGroups` uses the same packing as collider groups (who the ray "is" and what it hits). */
   raycast(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxDist: number,
-    filterGroups: number, exclude?: RAPIER.Collider): RayHit | null {
+    filterGroups: number, exclude?: RAPIER.Collider, skip?: Set<number>): RayHit | null {
     const ray = new RAPIER.Ray({ x: ox, y: oy, z: oz }, { x: dx, y: dy, z: dz });
-    const hit = this.world.castRayAndGetNormal(ray, maxDist, true, undefined, filterGroups, exclude);
+    const pred = skip && skip.size ? (c: RAPIER.Collider) => !skip.has(c.handle) : undefined;
+    const hit = this.world.castRayAndGetNormal(ray, maxDist, true, undefined, filterGroups, exclude, undefined, pred);
     if (!hit) return null;
     const p = ray.pointAt(hit.timeOfImpact);
     return {
@@ -60,6 +68,8 @@ export class PhysicsWorld {
       normal: { x: hit.normal.x, y: hit.normal.y, z: hit.normal.z },
     };
   }
+
+  materialOf(c: RAPIER.Collider): Material { return this.materials.get(c.handle) ?? 'concrete'; }
 
   get bodyCount(): number { return this.world.bodies.len(); }
   get colliderCount(): number { return this.world.colliders.len(); }

@@ -30,10 +30,11 @@ export function buildArena(scene: THREE.Scene, physics: PhysicsWorld, seed = 7):
     .setCollisionGroups(groups(Group.STATIC, ALL)).setFriction(0.9));
 
   const blocks: Block[] = [];
-  const addStatic = (x: number, y: number, z: number, wd: number, h: number, d: number, color: number, visual = true) => {
+  const addStatic = (x: number, y: number, z: number, wd: number, h: number, d: number, color: number, visual = true, mat: 'concrete' | 'metal' = 'concrete') => {
     if (visual) blocks.push({ x, y, z, w: wd, h, d, color });
-    w.createCollider(RAPIER.ColliderDesc.cuboid(wd / 2, h / 2, d / 2).setTranslation(x, y, z)
+    const col = w.createCollider(RAPIER.ColliderDesc.cuboid(wd / 2, h / 2, d / 2).setTranslation(x, y, z)
       .setCollisionGroups(groups(Group.STATIC, ALL)).setFriction(0.8));
+    if (mat !== 'concrete') physics.materials.set(col.handle, mat);
   };
 
   // Perimeter wall built from 1m concrete blocks with a few gaps of rubble.
@@ -74,7 +75,7 @@ export function buildArena(scene: THREE.Scene, physics: PhysicsWorld, seed = 7):
     scene.add(box(0.18, 3.2, 0.18, PAL.metal, x, 1.6, z));
     scene.add(box(0.5, 0.18, 0.5, PAL.metal, x, 3.25, z));
     scene.add(box(0.36, 0.08, 0.36, PAL.lamp, x, 3.14, z, PAL.lamp));
-    addStatic(x, 1.6, z, 0.2, 3.2, 0.2, 0, false);
+    addStatic(x, 1.6, z, 0.2, 3.2, 0.2, 0, false, 'metal');
   }
 
   // Scatter decor: grass tufts and rubble (visual only, instanced).
@@ -101,8 +102,9 @@ export function buildArena(scene: THREE.Scene, physics: PhysicsWorld, seed = 7):
   const crate = (x: number, y: number, z: number, sz: number) => {
     const body = w.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(x, y, z)
       .setRotation(quatY(r() * 0.4 - 0.2)).setLinearDamping(0.2).setAngularDamping(0.4).setCcdEnabled(false));
-    w.createCollider(RAPIER.ColliderDesc.cuboid(sz / 2, sz / 2, sz / 2).setDensity(PROPS.crateDensity)
+    const crateCol = w.createCollider(RAPIER.ColliderDesc.cuboid(sz / 2, sz / 2, sz / 2).setDensity(PROPS.crateDensity)
       .setFriction(0.7).setRestitution(0.15).setCollisionGroups(groups(Group.PROP, ALL)), body);
+    physics.materials.set(crateCol.handle, 'wood');
     const g = new THREE.Group();
     g.add(box(sz, sz, sz, PAL.crate));
     // Plank edges for voxel detail.
@@ -113,8 +115,9 @@ export function buildArena(scene: THREE.Scene, physics: PhysicsWorld, seed = 7):
   };
   const barrel = (x: number, z: number) => {
     const body = w.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(x, 0.6, z).setLinearDamping(0.2).setAngularDamping(0.5));
-    w.createCollider(RAPIER.ColliderDesc.cylinder(0.6, 0.36).setDensity(PROPS.barrelDensity).setFriction(0.6).setRestitution(0.2)
+    const barrelCol = w.createCollider(RAPIER.ColliderDesc.cylinder(0.6, 0.36).setDensity(PROPS.barrelDensity).setFriction(0.6).setRestitution(0.2)
       .setCollisionGroups(groups(Group.PROP, ALL)), body);
+    physics.materials.set(barrelCol.handle, 'metal');
     const g = new THREE.Group();
     const cyl = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.36, 1.2, 8), new THREE.MeshLambertMaterial({ color: PAL.barrel, flatShading: true }));
     cyl.castShadow = cyl.receiveShadow = true;
@@ -141,7 +144,7 @@ export function buildArena(scene: THREE.Scene, physics: PhysicsWorld, seed = 7):
 function quatY(a: number) { return { x: 0, y: Math.sin(a / 2), z: 0, w: Math.cos(a / 2) }; }
 
 function buildCar(blocks: Block[], cx: number, cz: number, yaw: number,
-  addStatic: (x: number, y: number, z: number, w: number, h: number, d: number, c: number, v?: boolean) => void): void {
+  addStatic: (x: number, y: number, z: number, w: number, h: number, d: number, c: number, v?: boolean, mat?: 'concrete' | 'metal') => void): void {
   const c = Math.cos(yaw), s = Math.sin(yaw);
   const put = (lx: number, y: number, lz: number, w: number, h: number, d: number, color: number) => {
     // Axis-aligned approximation: rotate the centre only (blocks stay boxy — reads as wreckage).
@@ -150,7 +153,7 @@ function buildCar(blocks: Block[], cx: number, cz: number, yaw: number,
   put(0, 0.55, 0, 1.9, 0.7, 4, PAL.rust);
   put(0, 1.15, -0.3, 1.7, 0.55, 2, 0x6f7f8a);
   for (const [lx, lz] of [[-0.95, 1.3], [0.95, 1.3], [-0.95, -1.3], [0.95, -1.3]]) put(lx, 0.3, lz, 0.3, 0.6, 0.6, 0x1d1d1f);
-  addStatic(cx, 0.75, cz, Math.abs(1.9 * c) + Math.abs(4 * s), 1.5, Math.abs(1.9 * s) + Math.abs(4 * c), 0, false);
+  addStatic(cx, 0.75, cz, Math.abs(1.9 * c) + Math.abs(4 * s), 1.5, Math.abs(1.9 * s) + Math.abs(4 * c), 0, false, 'metal');
 }
 
 function groundTexture(r: () => number): THREE.CanvasTexture {

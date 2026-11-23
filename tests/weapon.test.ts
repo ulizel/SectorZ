@@ -86,3 +86,28 @@ describe('manual reload', () => {
     expect(w.reloading).toBe(false);
   });
 });
+
+describe('active reload', () => {
+  const press = (w: WeaponState) => { const ev: WeaponEvent[] = []; w.update(DT, false, false, true, ev); return ev; };
+  it('pressing reload inside the sweet spot finishes instantly', () => {
+    const w = new WeaponState(WEAPONS.pistol);
+    w.ammo = 3;
+    press(w);
+    const [a, b] = WEAPONS.pistol.activeWindow;
+    while (w.reloadProgress < (a + b) / 2) run(w, DT, false);
+    const ev = press(w);
+    expect(ev).toContain('activeReload');
+    expect(w.reloading).toBe(false);
+    expect(w.ammo).toBe(12);
+  });
+  it('pressing outside the sweet spot fumbles (+0.5 s) and allows only one try', () => {
+    const w = new WeaponState(WEAPONS.pistol);
+    w.ammo = 3;
+    press(w);
+    run(w, 0.1, false);
+    const left = w.reloadLeft;
+    expect(press(w)).toContain('reloadFumble');
+    expect(w.reloadLeft).toBeGreaterThan(left + 0.4);
+    expect(press(w)).not.toContain('activeReload');
+  });
+});

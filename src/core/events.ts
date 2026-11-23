@@ -1,10 +1,16 @@
 /** Tiny typed event bus. Game events are also what a future co-op host would replicate. */
 export type GameEvents = {
   shot: { x: number; y: number; z: number; dx: number; dz: number; weapon: string };
-  hit: { x: number; y: number; z: number; nx: number; ny: number; nz: number; dynamic: boolean };
+  hit: {
+    x: number; y: number; z: number; nx: number; ny: number; nz: number; dynamic: boolean;
+    material: 'concrete' | 'wood' | 'metal';
+    /** Bullet passed through (exit wound on the far side). */
+    penetrated: boolean;
+  };
   reloadStart: { weapon: string; time: number };
   reloadEnd: { weapon: string };
   dryFire: { weapon: string };
+  activeReload: { weapon: string; success: boolean };
 };
 
 type Handler<T> = (e: T) => void;
