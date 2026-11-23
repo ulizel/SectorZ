@@ -70,6 +70,9 @@ export class Game {
   readonly stats = { shots: 0, hits: 0, ticks: 0, maxImpactSpeed: 0, penetrations: 0, activeReloads: 0, zombieHits: 0, kills: 0, dismembers: 0 };
   private readonly penSkip = new Set<number>();
   private readonly holes: BulletHoles;
+  private readonly blood: BulletHoles;
+  private readonly impacts: import('./entities/zombieManager').ImpactResult[] = [];
+  private thudCooldown = 0;
   private readonly hitMarker = document.getElementById('hitmarker')!;
   private hitMarkerT = 0;
   private readonly retMat: THREE.MeshBasicMaterial;
@@ -81,8 +84,8 @@ export class Game {
 
   constructor(container: HTMLElement, touchLayer: HTMLElement, reloadBtn: HTMLElement, switchBtn: HTMLElement, readonly quality: QualityPreset) {
     this.zombies = new ZombieManager(this.physics, quality.name === 'mobile'
-      ? { maxRagdolls: 6, maxLooseLimbs: 20, corpseLife: 25 }
-      : { maxRagdolls: 12, maxLooseLimbs: 40, corpseLife: 40 });
+      ? { maxRagdolls: 6, maxLooseLimbs: 24, maxCorpses: 16, corpseLife: 60 }
+      : { maxRagdolls: 12, maxLooseLimbs: 48, maxCorpses: 32, corpseLife: 90 });
     this.renderer = new Renderer(container, quality);
     this.input = new InputManager(touchLayer, reloadBtn, switchBtn);
     const scene = this.renderer.scene;
@@ -97,6 +100,7 @@ export class Game {
     this.tracers = new Tracers(scene);
     this.flash = new MuzzleFlash(scene);
     this.holes = new BulletHoles(scene);
+    this.blood = new BulletHoles(scene, quality.name === 'mobile' ? 40 : 80, 0x5c070a, 0.32, 30, 0.8);
     scene.add(this.sparks.mesh, this.debris.mesh);
 
     // Aim line + reticle. Touch: shown only while the aim stick is past its deadzone.
@@ -220,6 +224,19 @@ export class Game {
       else if (e === 'reloadFumble') this.events.emit('activeReload', { weapon: w, success: false });
     }
     this.physics.step();
+    // Environmental impacts: bodies slammed into the world take damage; thuds for sound.
+    this.zombies.processImpacts(this.physics.contactForces, dt, this.impacts);
+    this.thudCooldown -= dt;
+    for (const im of this.impacts) {
+      if (im.severed) {
+        this.stats.dismembers++;
+        this.events.emit('dismember', { x: im.x, y: im.y, z: im.z, dx: 0, dz: 0 });
+      }
+      if (this.thudCooldown <= 0 && im.force > 400) {
+        this.thudCooldown = 0.05;
+        this.sfx.thud(Math.min(1, im.force / 3000), im.mass < 4);
+      }
+    }
   }
 
   private fire(): void {
@@ -365,6 +382,13 @@ export class Game {
         }
         for (let i = 0; i < 3; i++) this.debris.emit(e.x, e.y, e.z, (Math.random() - 0.5) * 0.8, Math.random() * 0.5, (Math.random() - 0.5) * 0.8,
           0.1 + Math.random() * 0.06, 0.35, 0xa01418, 0, 1, 4, 2);
+        // Blood on the world: splatter on a wall behind the target, and drops on the floor.
+        const bx = -e.nx, bz = -e.nz, bl = Math.hypot(bx, bz) || 1;
+        const wall = this.physics.raycast(e.x + (bx / bl) * 0.3, e.y, e.z + (bz / bl) * 0.3, bx / bl, -0.15, bz / bl, 2.5,
+          groups(Group.PLAYER, Group.STATIC));
+        if (wall && wall.point.y > 0.05) this.blood.add(wall.point.x, wall.point.y, wall.point.z, wall.normal.x, wall.normal.y, wall.normal.z, 1.1);
+        const fd = 0.4 + Math.random() * 1.2;
+        this.blood.add(e.x + (bx / bl) * fd, 0.006, e.z + (bz / bl) * fd, 0, 1, 0, 0.6 + Math.random() * 0.6);
         this.sfx.impact(m);
         this.hitMarker.classList.remove('on');
         void this.hitMarker.offsetWidth;
@@ -465,6 +489,7 @@ export class Game {
     this.flash.update(frameDt);
     this.tracers.update(frameDt);
     this.holes.update(frameDt);
+    this.blood.update(frameDt);
     if (this.hitMarkerT > 0) { this.hitMarkerT -= frameDt; if (this.hitMarkerT <= 0) this.hitMarker.classList.remove('on'); }
     this.sparks.update(frameDt);
     this.debris.update(frameDt);
@@ -492,7 +517,7 @@ export class Game {
       if (view) { this.zombieViews.delete(z); this.sinking.push(view); }
     }
     zm.removed.length = 0;
-    for (const view of this.zombieViews.values()) view.update();
+    for (const view of this.zombieViews.values()) view.update(dt);
     for (let i = this.sinking.length - 1; i >= 0; i--) if (this.sinking[i].sinkStep(dt)) this.sinking.splice(i, 1);
     // Severed stumps spurt blood for a moment.
     for (const b of zm.bleeders) {
@@ -526,10 +551,10 @@ export class Game {
 
   explode(x: number, y: number, z: number, radius = 5): void {
     const dt = SIM_DT;
-    const before = this.zombies.ragdollCount;
+    const before = this.zombies.deadCount;
     const torn = this.zombies.explode(x, y, z, radius, 160, 45, dt);
     this.stats.dismembers += torn;
-    this.stats.kills += Math.max(0, this.zombies.ragdollCount - before);
+    this.stats.kills += Math.max(0, this.zombies.deadCount - before);
     for (const prop of this.props) {
       const t = prop.body.translation();
       let dx = t.x - x, dz = t.z - z;

@@ -27,7 +27,7 @@ export const groups = (member: number, filter: number) => ((member & 0xffff) << 
 /** Surface material: drives bullet penetration, impact effects and sounds. */
 export type Material = 'concrete' | 'wood' | 'metal' | 'flesh';
 /** Penetration power a bullet spends passing through each material (Infinity = always stops). */
-export const MATERIAL_COST: Record<Material, number> = { wood: 0.35, metal: 0.9, flesh: 0.5, concrete: Infinity };
+export const MATERIAL_COST: Record<Material, number> = { wood: 0.35, metal: 0.9, flesh: 0.3, concrete: Infinity };
 
 export interface RayHit {
   collider: RAPIER.Collider;
@@ -41,6 +41,9 @@ export class PhysicsWorld {
   lastStepMs = 0;
   /** Collider handle → material (default concrete). */
   readonly materials = new Map<number, Material>();
+  /** Contact-force events from the last step (colliders with CONTACT_FORCE_EVENTS enabled). */
+  readonly contactForces: { c1: number; c2: number; force: number }[] = [];
+  private readonly events = new RAPIER.EventQueue(true);
 
   constructor() {
     this.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
@@ -49,8 +52,12 @@ export class PhysicsWorld {
 
   step(): void {
     const t0 = performance.now();
-    this.world.step();
+    this.world.step(this.events);
     this.lastStepMs = performance.now() - t0;
+    this.contactForces.length = 0;
+    this.events.drainContactForceEvents((e) => {
+      this.contactForces.push({ c1: e.collider1(), c2: e.collider2(), force: e.totalForceMagnitude() });
+    });
   }
 
   /** Hitscan ray. `filterGroups` uses the same packing as collider groups (who the ray "is" and what it hits). */

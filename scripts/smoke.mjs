@@ -294,12 +294,60 @@ async function phone(browser, deviceName, landscape) {
   await ctx.close();
 }
 
+async function ragdollLab(browser) {
+  console.log('\n[Ragdoll Lab, desktop]');
+  const page = await browser.newPage({ viewport: { width: 1000, height: 640 } });
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+  await throttle(page);
+  await page.goto(`${BASE}?lab&quality=desktop`);
+  await waitReady(page);
+  await ticks(page, 20);
+  check('lab spawns 5 zombies', (await state(page)).zombiesAlive === 5);
+  // Two zombies in a line straight ahead: one pistol round should pass through the first into the second.
+  await page.evaluate(() => {
+    const g = window.__SECTORZ__.game;
+    g.zombies.clear();
+    g.zombies.spawn(g.player.x, g.player.z + 4, Math.PI);
+    g.zombies.spawn(g.player.x, g.player.z + 5.2, Math.PI);
+  });
+  await ticks(page, 10);
+  const aim = await worldToScreen(page, (await state(page)).x, 1.15, (await state(page)).z + 4);
+  for (let i = 0; i < 3; i++) { await page.mouse.move(aim.x, aim.y); await sleep(300); }
+  const a = await state(page);
+  await page.mouse.down(); await ticks(page, 2); await page.mouse.up();
+  await ticks(page, 10);
+  const b = await state(page);
+  check('bullets hit zombie body parts', b.zombieHits > a.zombieHits, `hits=${b.zombieHits - a.zombieHits}`);
+  check('pistol round passes through one zombie into the next', b.zombieHits - a.zombieHits >= 2 && b.penetrations > a.penetrations, `hits=${b.zombieHits - a.zombieHits}`);
+  for (let i = 0; i < 6; i++) { await page.mouse.down(); await ticks(page, 2); await page.mouse.up(); await ticks(page, 16); }
+  await ticks(page, 30);
+  const c = await state(page);
+  check('shooting kills a zombie (ragdoll)', c.kills >= 1, `kills=${c.kills}`);
+  await page.evaluate(() => { const g = window.__SECTORZ__.game; g.spawnZombies(5); });
+  await ticks(page, 10);
+  await page.keyboard.press('KeyB');
+  await ticks(page, 30);
+  await page.screenshot({ path: `${OUT}/lab-explosion.png` });
+  await ticks(page, 150);
+  const d = await state(page);
+  check('explosion kills/knocks zombies and tears limbs', d.kills > c.kills && d.severed > 0, `kills=${d.kills} severed=${d.severed}`);
+  const parts = await page.evaluate(() => window.__SECTORZ__.game.zombies.zombies.flatMap((z) => z.parts.map((p) => p.body.translation().y)));
+  check('no ragdoll part through the floor or NaN', parts.every((y) => Number.isFinite(y) && y > 0), `min y=${Math.min(...parts).toFixed(3)}`);
+  check('physics step within budget', d.physicsMs < 8, `avg ${d.physicsMs.toFixed(2)} ms`);
+  check('no JS errors (lab)', errors.length === 0, errors.join(' | '));
+  await page.close();
+}
+
 try {
   await waitForServer();
   const browser = await chromium.launch(launchArgs);
-  await desktop(browser);
-  await phone(browser, 'iPhone 13', false);
-  await phone(browser, 'Pixel 7', true);
+  // SMOKE_ONLY=lab|desktop|phone runs one scenario (for quick local checks).
+  const only = process.env.SMOKE_ONLY;
+  if (!only || only === 'desktop') await desktop(browser);
+  if (!only || only === 'lab') await ragdollLab(browser);
+  if (!only || only === 'phone') { await phone(browser, 'iPhone 13', false); await phone(browser, 'Pixel 7', true); }
   await browser.close();
 } catch (e) {
   console.error(e);

@@ -81,6 +81,12 @@ export class Sfx {
     this.burst(0.03, 5000, 3, 0.2, 'bandpass');
     this.tone(1800 + Math.random() * 600, 1500, 0.25, 0.12, 'sine');
   }
+  /** Body/limb hitting the ground or a wall: heavy thud, or a lighter tap for small limbs. */
+  thud(volume: number, light: boolean): void {
+    if (light) { this.burst(0.05, 900, 2, 0.25 * volume, 'bandpass'); return; }
+    this.burst(0.12, 380, 1, 0.55 * volume);
+    this.tone(90, 45, 0.1, 0.4 * volume);
+  }
   dismember(): void { this.burst(0.18, 600, 1, 0.6); this.tone(80, 40, 0.2, 0.5); this.burst(0.25, 1800, 0.8, 0.25, 'lowpass', 0.05); }
   explosion(): void {
     this.burst(0.9, 600, 0.5, 1.2);

@@ -22,19 +22,38 @@ export const PART_DAMAGE: Record<PartName, { hp: number; mult: number; breakImpu
   shinR: { hp: 40, mult: 0.5, breakImpulse: 30 },
 };
 
-/**
- * Joint limits (radians about the part's local X; + bends the child backwards).
- * Shoulders are free ball joints (Rapier's JS API has no cone limits); everything else is a
- * limited hinge so corpses don't fold into impossible shapes.
- */
-const HINGE_LIMITS: Partial<Record<PartName, [number, number]>> = {
-  torso: [-0.5, 0.9], head: [-0.7, 0.8],
-  forearmL: [-2.4, 0.05], forearmR: [-2.4, 0.05],
-  thighL: [-1.9, 0.6], thighR: [-1.9, 0.6],
-  shinL: [-0.05, 2.4], shinR: [-0.05, 2.4],
+/** Hinges (elbows, knees): native Rapier limits + motors. Radians about local X. */
+const HINGE: Partial<Record<PartName, { lim: [number, number]; crumple: number }>> = {
+  forearmL: { lim: [-2.4, 0.05], crumple: -0.6 }, forearmR: { lim: [-2.4, 0.05], crumple: -0.6 },
+  shinL: { lim: [-0.05, 2.4], crumple: 1.3 }, shinR: { lim: [-0.05, 2.4], crumple: 1.3 },
 };
 
+/**
+ * Ball joints (spine, neck, shoulders, hips) with a custom swing-twist limiter, since Rapier's
+ * JS API has no cone limits. Swing about X (+ = child tips forward... see rig) and Z (+ = toward +X),
+ * twist about the bone (Y). `crumple` is the relative pose "muscles" pull toward as the zombie dies.
+ */
+interface BallSpec { x: [number, number]; z: [number, number]; twist: [number, number]; crumple: [number, number] }
+const BALL: Partial<Record<PartName, BallSpec>> = {
+  torso: { x: [-0.5, 0.9], z: [-0.4, 0.4], twist: [-0.6, 0.6], crumple: [0.55, 0] },
+  head: { x: [-0.7, 0.8], z: [-0.5, 0.5], twist: [-1.0, 1.0], crumple: [0.4, 0] },
+  upperArmL: { x: [-3.0, 1.0], z: [-0.25, 2.6], twist: [-1.2, 1.2], crumple: [-0.3, 0.2] },
+  upperArmR: { x: [-3.0, 1.0], z: [-2.6, 0.25], twist: [-1.2, 1.2], crumple: [-0.3, -0.2] },
+  thighL: { x: [-1.9, 0.5], z: [-0.3, 0.9], twist: [-0.5, 0.5], crumple: [-0.9, 0.1] },
+  thighR: { x: [-1.9, 0.5], z: [-0.9, 0.3], twist: [-0.5, 0.5], crumple: [-0.9, -0.1] },
+};
+
+/** Death "muscle tone" fades out over this many seconds (knees buckle, body crumples, then limp). */
+export const MUSCLE_FADE = 1.0;
+/** Limit violations smaller than this (rad, ~3°) are ignored. */
+const LIMIT_DEADBAND = 0.05;
+/** Collider shrink on limbs (visual box unchanged) so neighbouring parts don't snag and jitter. */
+const LIMB_COLLIDER_SCALE = 0.85;
+/** Parts that get continuous collision detection (small and fast when thrown). */
+const CCD_PARTS = new Set<PartName>(['head', 'forearmL', 'forearmR', 'upperArmL', 'upperArmR']);
+
 export const ZOMBIE_MAX_HP = 100;
+export type ZombieState = 'alive' | 'knocked' | 'gettingUp' | 'dead';
 
 export interface ZombiePart {
   def: PartDef;
@@ -44,35 +63,52 @@ export interface ZombiePart {
   joint: RAPIER.ImpulseJoint | null; // to parent
   parent: number; // index, -1 for root
   hp: number;
+  maxHp: number;
   /** Torn off the body (it, and its children, now fly free). */
   severed: boolean;
   /** Simulated (dynamic) rather than animated. */
   dynamic: boolean;
+  /** Limp but still attached while alive (e.g. shattered shoulder). */
+  dangling: boolean;
   prev: THREE.Vector3;
   flinch: number;
 }
 
+export interface Wound { part: number; local: THREE.Vector3 }
+
 const v = new THREE.Vector3();
+const v2 = new THREE.Vector3();
 const q = new THREE.Quaternion();
+const qa = new THREE.Quaternion(), qb = new THREE.Quaternion(), qr = new THREE.Quaternion();
+const qt = new THREE.Quaternion(), qs = new THREE.Quaternion(), qd = new THREE.Quaternion();
+const AX_Y = new THREE.Vector3(0, 1, 0);
 
 let nextId = 1;
 
 /**
- * A zombie made of 11 physical voxel parts. Alive: parts are kinematic bodies that follow a
- * procedural animation (so bullets hit exact limbs). Dead: parts switch to dynamic and the
- * joints take over → genuine ragdoll. Limbs tear off by removing their joint.
+ * A zombie made of 11 physical voxel parts. Alive: parts are kinematic bodies following a
+ * procedural animation (bullets hit exact limbs). Knocked/dead: parts are dynamic and the joints
+ * (plus a swing-twist limiter and fading muscles) take over → genuine ragdoll. Limbs tear off by
+ * removing their joint. Corpses at rest are frozen (fixed bodies: ~free) and wake when disturbed.
  */
 export class Zombie {
   readonly id = nextId++;
   readonly parts: ZombiePart[] = [];
   readonly pose = new PoseRig();
-  alive = true;
+  readonly wounds: Wound[] = [];
+  state: ZombieState = 'alive';
   hp = ZOMBIE_MAX_HP;
   /** Seconds since death (drives cleanup). */
   deadTime = 0;
+  /** Seconds the ragdoll has been at rest. */
+  restTime = 0;
+  frozen = false;
+  private ragTime = 0; // seconds since going ragdoll (muscle fade)
+  private knockTime = 0;
+  private getUpT = 0;
+  private readonly getUpFrom: { p: THREE.Vector3; q: THREE.Quaternion }[] = [];
   private t = Math.random() * 10;
   private readonly w: RAPIER.World;
-  /** Stagger offset (m) applied to the animated root when hit. */
   private stagger = new THREE.Vector3();
 
   constructor(private readonly physics: PhysicsWorld, public x: number, public z: number, public yaw: number) {
@@ -81,20 +117,28 @@ export class Zombie {
     HUMANOID.forEach((def, i) => {
       this.partWorld(i, v, q);
       const body = this.w.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased()
-        .setTranslation(v.x, v.y, v.z).setRotation(q).setLinearDamping(0.05).setAngularDamping(0.6)
-        .setCcdEnabled(def.name === 'head'));
+        .setTranslation(v.x, v.y, v.z).setRotation(q).setLinearDamping(0.05).setAngularDamping(0.8)
+        .setCcdEnabled(CCD_PARTS.has(def.name)));
+      const limb = def.name !== 'torso' && def.name !== 'pelvis' && def.name !== 'head';
+      const s = limb ? LIMB_COLLIDER_SCALE : 1;
       const collider = this.w.createCollider(
-        RAPIER.ColliderDesc.cuboid(def.size[0] / 2, def.size[1] / 2, def.size[2] / 2)
+        RAPIER.ColliderDesc.cuboid(def.size[0] / 2 * s, def.size[1] / 2, def.size[2] / 2 * s)
           .setMass(def.mass).setFriction(0.8).setRestitution(0.15)
-          .setCollisionGroups(groups(Group.ZOMBIE, ALL)), body);
+          .setCollisionGroups(groups(Group.ZOMBIE, ALL))
+          .setActiveEvents(RAPIER.ActiveEvents.CONTACT_FORCE_EVENTS).setContactForceEventThreshold(250), body);
       physics.materials.set(collider.handle, 'flesh');
+      const hp = PART_DAMAGE[def.name].hp;
       this.parts.push({
         def, index: i, body, collider, joint: null, parent: def.parent ? HUMANOID.findIndex((p) => p.name === def.parent) : -1,
-        hp: PART_DAMAGE[def.name].hp, severed: false, dynamic: false, prev: v.clone(), flinch: 0,
+        hp, maxHp: hp, severed: false, dynamic: false, dangling: false, prev: v.clone(), flinch: 0,
       });
     });
     for (const p of this.parts) if (p.parent >= 0) p.joint = this.makeJoint(p);
   }
+
+  get alive(): boolean { return this.state !== 'dead'; }
+  /** Physics-driven right now (knocked down or dead). */
+  get ragdoll(): boolean { return this.state === 'knocked' || this.state === 'dead'; }
 
   private makeJoint(p: ZombiePart): RAPIER.ImpulseJoint {
     const parent = this.parts[p.parent];
@@ -102,17 +146,19 @@ export class Zombie {
     // Pivot in each body's local frame (bodies sit at their box centres).
     const a1 = { x: d.joint[0] - pd.center[0], y: d.joint[1] - pd.center[1], z: d.joint[2] - pd.center[2] };
     const a2 = { x: -d.center[0], y: -d.center[1], z: -d.center[2] };
-    const lim = HINGE_LIMITS[d.name];
+    const hinge = HINGE[d.name];
     let data: RAPIER.JointData;
-    if (lim) {
+    if (hinge) {
       data = RAPIER.JointData.revolute(a1, a2, { x: 1, y: 0, z: 0 });
       data.limitsEnabled = true;
-      data.limits = lim;
+      data.limits = hinge.lim;
     } else {
       data = RAPIER.JointData.spherical(a1, a2);
     }
     const j = this.w.createImpulseJoint(data, parent.body, p.body, true);
-    j.setContactsEnabled(false);
+    // Upper arms keep colliding with the torso (the chest physically stops arms swinging through
+    // it; colliders are shrunk so they don't touch at rest). Other jointed pairs overlap at rest.
+    j.setContactsEnabled(d.name.startsWith('upperArm'));
     return j;
   }
 
@@ -134,12 +180,14 @@ export class Zombie {
     this.pose.root.rotation.set(0, this.yaw, 0);
     const fl = (n: PartName) => this.parts.length ? this.parts[HUMANOID.findIndex((d) => d.name === n)].flinch : 0;
     for (const part of this.parts) part.flinch *= Math.exp(-7 * dt);
+    // Big hits make the whole body reel back.
+    const reel = Math.min(0.6, this.stagger.length() * 2.5);
     p.pelvis.position.y = 0.8 + Math.sin(t * 1.3) * 0.015;
     p.pelvis.rotation.set(0, Math.sin(t * 0.7) * 0.1, Math.sin(t * 0.9) * 0.04);
-    p.torso.rotation.set(0.35 + Math.sin(t * 1.1) * 0.05 - fl('torso') - fl('pelvis') * 0.5, 0, Math.sin(t * 0.8) * 0.06);
+    p.torso.rotation.set(0.35 + Math.sin(t * 1.1) * 0.05 - fl('torso') - fl('pelvis') * 0.5 - reel, 0, Math.sin(t * 0.8) * 0.06);
     p.head.rotation.set(-0.25 + Math.sin(t * 1.7) * 0.08 - fl('head') * 1.5, Math.sin(t * 0.6) * 0.3, Math.sin(t * 0.9) * 0.15);
-    p.upperArmL.rotation.set(-1.25 + Math.sin(t * 1.4) * 0.12 + fl('upperArmL'), -0.1, 0.05);
-    p.upperArmR.rotation.set(-1.15 + Math.sin(t * 1.2 + 1) * 0.12 + fl('upperArmR'), 0.1, -0.05);
+    p.upperArmL.rotation.set(-1.25 + Math.sin(t * 1.4) * 0.12 + fl('upperArmL') + reel, -0.1, 0.05);
+    p.upperArmR.rotation.set(-1.15 + Math.sin(t * 1.2 + 1) * 0.12 + fl('upperArmR') + reel, 0.1, -0.05);
     p.forearmL.rotation.set(-0.25 + fl('forearmL'), 0, 0);
     p.forearmR.rotation.set(-0.4 + fl('forearmR'), 0, 0);
     p.thighL.rotation.set(-0.1 + fl('thighL') * 0.5, 0, 0.04);
@@ -149,17 +197,116 @@ export class Zombie {
     this.pose.root.updateMatrixWorld(true);
   }
 
-  /** Sim tick (before physics.step): drive animated parts to the pose. */
+  /** Sim tick (before physics.step). */
   update(dt: number): void {
-    if (!this.alive) { this.deadTime += dt; return; }
+    if (this.state === 'dead') this.deadTime += dt;
+    if (this.ragdoll) {
+      if (this.frozen) return;
+      this.ragTime += dt;
+      this.applyJointControl(dt);
+      this.trackRest(dt);
+      if (this.state === 'knocked') {
+        this.knockTime += dt;
+        if ((this.knockTime > 2 && this.restTime > 0.3) || this.knockTime > 3.5) this.beginGetUp();
+      }
+      return;
+    }
     this.animate(dt);
+    if (this.state === 'gettingUp') this.getUpT = Math.min(1, this.getUpT + dt / 0.9);
+    const k = this.state === 'gettingUp' ? easeInOut(this.getUpT) : 1;
     for (const p of this.parts) {
       if (p.dynamic) continue;
       p.prev.copy(p.body.translation() as THREE.Vector3Like);
       this.partWorld(p.index, v, q);
+      if (k < 1) {
+        const from = this.getUpFrom[p.index];
+        v.lerpVectors(from.p, v, k);
+        q.slerpQuaternions(from.q, q, k);
+      }
       p.body.setNextKinematicTranslation(v);
       p.body.setNextKinematicRotation(q);
     }
+    if (this.state === 'gettingUp' && this.getUpT >= 1) this.state = 'alive';
+    // Dangling limbs still get the limiter so they hang naturally.
+    if (this.parts.some((p) => p.dangling)) this.applyJointControl(dt);
+  }
+
+  /** Swing-twist limits for ball joints + fading death "muscles" (all joints). */
+  private applyJointControl(dt: number): void {
+    const muscle = this.state === 'dead' ? Math.max(0, 1 - this.ragTime / MUSCLE_FADE) : this.state === 'knocked' ? 0.25 : 0;
+    for (const p of this.parts) {
+      if (!p.joint || p.severed || !p.dynamic) continue;
+      const parent = this.parts[p.parent];
+      const hinge = HINGE[p.def.name];
+      if (hinge) {
+        const j = p.joint as RAPIER.RevoluteImpulseJoint;
+        if (muscle > 0) j.configureMotorPosition(hinge.crumple, 40 * muscle * p.def.mass, 3 * p.def.mass);
+        else j.configureMotorVelocity(0, 0.15 * p.def.mass); // joint friction: no endless wobble
+        continue;
+      }
+      const spec = BALL[p.def.name];
+      if (!spec) continue;
+      if (p.body.isSleeping() && (!parent.dynamic || parent.body.isSleeping())) continue;
+      const pr = parent.body.rotation(), cr = p.body.rotation();
+      qa.set(pr.x, pr.y, pr.z, pr.w);
+      qb.set(cr.x, cr.y, cr.z, cr.w);
+      qr.copy(qa).invert().multiply(qb); // child relative to parent (rest = identity)
+      // Twist about the bone (Y), swing = the rest.
+      qt.set(0, qr.y, 0, qr.w);
+      if (qt.lengthSq() < 1e-8) qt.identity(); else qt.normalize();
+      qs.copy(qr).multiply(qd.copy(qt).invert());
+      let twist = 2 * Math.atan2(qt.y, qt.w);
+      if (twist > Math.PI) twist -= Math.PI * 2;
+      const sAng = 2 * Math.acos(Math.min(1, Math.abs(qs.w)));
+      const sgn = qs.w < 0 ? -1 : 1;
+      const sl = Math.sqrt(qs.x * qs.x + qs.z * qs.z) || 1;
+      let sx = (qs.x * sgn / sl) * sAng, sz = (qs.z * sgn / sl) * sAng;
+      // Desired relative pose: muscles pull toward the crumple pose; limits clamp.
+      if (muscle > 0) {
+        const pull = Math.min(1, 6 * dt) * muscle;
+        sx += (spec.crumple[0] - sx) * pull;
+        sz += (spec.crumple[1] - sz) * pull;
+        twist += (0 - twist) * pull;
+      }
+      const cx = clamp(sx, spec.x), cz = clamp(sz, spec.z), ct = clamp(twist, spec.twist);
+      const sxOrig = (qs.x * sgn / sl) * sAng, szOrig = (qs.z * sgn / sl) * sAng;
+      let twOrig = 2 * Math.atan2(qt.y, qt.w); if (twOrig > Math.PI) twOrig -= Math.PI * 2;
+      // Deadband: tiny violations are left to settle, otherwise the limiter fights ground contacts
+      // and keeps corpses twitching forever (and awake).
+      const DEAD = muscle > 0 ? 1e-4 : LIMIT_DEADBAND;
+      if (Math.abs(cx - sxOrig) < DEAD && Math.abs(cz - szOrig) < DEAD && Math.abs(ct - twOrig) < DEAD) continue;
+      // Target relative rotation, then the world-space correction rotation that gets us there.
+      const sw = Math.hypot(cx, cz);
+      qs.setFromAxisAngle(sw > 1e-6 ? v2.set(cx / sw, 0, cz / sw) : v2.set(1, 0, 0), sw);
+      qt.setFromAxisAngle(AX_Y, ct);
+      qd.copy(qs).multiply(qt).multiply(qr.invert()); // desired * current⁻¹ (parent frame)
+      if (qd.w < 0) qd.set(-qd.x, -qd.y, -qd.z, -qd.w);
+      const ang = 2 * Math.acos(Math.min(1, qd.w));
+      if (ang < 1e-4) continue;
+      const s = Math.sin(ang / 2);
+      v2.set(qd.x / s, qd.y / s, qd.z / s).applyQuaternion(qa); // axis → world
+      // Velocity constraint: the relative spin along the correction axis must be at least what
+      // closes the error over a few steps. Only the deficit is added (no accumulation → no jitter).
+      const want = (ang / dt) * 0.5;
+      const ca = p.body.angvel(), pa = parent.body.angvel();
+      const relAlong = (ca.x - (parent.dynamic ? pa.x : 0)) * v2.x + (ca.y - (parent.dynamic ? pa.y : 0)) * v2.y + (ca.z - (parent.dynamic ? pa.z : 0)) * v2.z;
+      const deficit = want - relAlong;
+      if (deficit <= 0) continue;
+      const mc = p.def.mass, mp = parent.dynamic ? parent.def.mass : Infinity;
+      const kc = mp === Infinity ? 1 : mp / (mc + mp), kp = mp === Infinity ? 0 : mc / (mc + mp);
+      p.body.setAngvel({ x: ca.x + v2.x * deficit * kc, y: ca.y + v2.y * deficit * kc, z: ca.z + v2.z * deficit * kc }, true);
+      if (kp > 0) parent.body.setAngvel({ x: pa.x - v2.x * deficit * kp, y: pa.y - v2.y * deficit * kp, z: pa.z - v2.z * deficit * kp }, true);
+    }
+  }
+
+  private trackRest(dt: number): void {
+    let moving = false;
+    for (const p of this.parts) {
+      if (!p.dynamic) continue;
+      const lv = p.body.linvel(), av = p.body.angvel();
+      if (lv.x * lv.x + lv.y * lv.y + lv.z * lv.z > 0.03 || av.x * av.x + av.y * av.y + av.z * av.z > 1.0) { moving = true; break; }
+    }
+    this.restTime = moving ? 0 : this.restTime + dt;
   }
 
   private makeDynamic(p: ZombiePart, dt: number): void {
@@ -179,50 +326,114 @@ export class Zombie {
     return out;
   }
 
-  /** Go limp: every animated part becomes a dynamic ragdoll body. */
+  /** Go limp: every animated part becomes a dynamic ragdoll body; muscles fade over MUSCLE_FADE. */
   kill(dt: number): void {
-    if (!this.alive) return;
-    this.alive = false;
+    if (this.state === 'dead') return;
+    const wasRagdoll = this.ragdoll;
+    this.state = 'dead';
     this.hp = 0;
+    if (!wasRagdoll) this.ragTime = 0;
     for (const p of this.parts) this.makeDynamic(p, dt);
+  }
+
+  /** Knocked off its feet but alive: ragdoll now, gets back up after ~2 s. */
+  knockDown(dt: number): void {
+    if (this.state !== 'alive' && this.state !== 'gettingUp') return;
+    this.state = 'knocked';
+    this.knockTime = 0;
+    this.ragTime = 0;
+    this.restTime = 0;
+    for (const p of this.parts) this.makeDynamic(p, dt);
+  }
+
+  /** Switch back to animation, blending each part from where it lies to the standing pose. */
+  private beginGetUp(): void {
+    const pel = this.parts[0].body.translation();
+    const head = this.parts[2].body.translation();
+    this.x = pel.x; this.z = pel.z;
+    // Stand up facing the way the head was pointing.
+    if (Math.hypot(head.x - pel.x, head.z - pel.z) > 0.1) this.yaw = Math.atan2(head.x - pel.x, head.z - pel.z);
+    this.getUpFrom.length = 0;
+    for (const p of this.parts) {
+      const t = p.body.translation(), r = p.body.rotation();
+      this.getUpFrom.push({ p: new THREE.Vector3(t.x, t.y, t.z), q: new THREE.Quaternion(r.x, r.y, r.z, r.w) });
+      if (p.severed || p.dangling) continue;
+      p.body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased, true);
+      p.collider.setCollisionGroups(groups(Group.ZOMBIE, ALL));
+      p.dynamic = false;
+    }
+    this.state = 'gettingUp';
+    this.getUpT = 0;
+    this.stagger.set(0, 0, 0);
   }
 
   /** Tear a limb off: remove its joint; it and its children become free bodies. Returns false if not detachable. */
   sever(i: number, dt: number): boolean {
     const p = this.parts[i];
-    if (p.severed || !p.joint || PART_DAMAGE[p.def.name].hp === Infinity) return false;
+    if (p.severed || !p.joint || p.maxHp === Infinity) return false;
+    if (this.frozen) this.unfreeze();
     this.w.removeImpulseJoint(p.joint, true);
     p.joint = null;
     p.severed = true;
     for (const s of this.subtree(i)) this.makeDynamic(s, dt);
-    // Losing the head or a leg drops the zombie (crawlers come in a later phase).
     const n = p.def.name;
+    if (n === 'head') {
+      // A severed head rolls.
+      p.body.setAngularDamping(0.15);
+      p.body.applyTorqueImpulse({ x: (Math.random() - 0.5) * 0.4, y: (Math.random() - 0.5) * 0.4, z: (Math.random() - 0.5) * 0.4 }, true);
+    }
+    // Losing the head or a leg drops the zombie (crawlers come in a later phase).
     if (n === 'head' || n.startsWith('thigh') || n.startsWith('shin')) this.kill(dt);
     return true;
   }
 
   /**
-   * Apply a bullet/explosion hit to part i. Returns which part was severed (or -1).
-   * `ix,iy,iz` is the impulse (N·s); `px,py,pz` the hit point.
+   * Apply a hit to part i. Returns which part was severed (or -1).
+   * `ix,iy,iz` impulse (N·s); `px,py,pz` hit point; `wound` records a visible wound there.
    */
-  hit(i: number, damage: number, ix: number, iy: number, iz: number, px: number, py: number, pz: number, dt: number): number {
+  hit(i: number, damage: number, ix: number, iy: number, iz: number, px: number, py: number, pz: number, dt: number, wound = false): number {
     const p = this.parts[i];
+    if (this.frozen) this.unfreeze();
     const dmg = PART_DAMAGE[p.def.name];
     const impulse = Math.hypot(ix, iy, iz);
+    if (wound && this.wounds.filter((w) => w.part === i).length < 6) {
+      // Wound position in the part's local frame (so it moves with the limb).
+      const t = p.body.translation(), r = p.body.rotation();
+      const local = new THREE.Vector3(px - t.x, py - t.y, pz - t.z).applyQuaternion(q.set(r.x, r.y, r.z, r.w).invert());
+      this.wounds.push({ part: i, local });
+    }
     if (this.alive) {
       this.hp -= damage * dmg.mult;
-      p.flinch += Math.min(0.9, impulse * 0.05);
-      this.stagger.x += ix * 0.006; this.stagger.z += iz * 0.006;
+      if (this.state === 'alive' || this.state === 'gettingUp') {
+        p.flinch += Math.min(0.9, impulse * 0.05);
+        this.stagger.x += ix * 0.008; this.stagger.z += iz * 0.008;
+      }
       if (this.hp <= 0) this.kill(dt);
     }
     p.hp -= damage;
     let severed = -1;
     if (p.hp <= 0 || impulse > dmg.breakImpulse) {
-      // Damage to a limb tip can carry through to the next joint up if the tip is already gone.
       if (this.sever(i, dt)) severed = i;
+    } else if (this.alive && !p.dynamic && p.def.name.startsWith('upperArm') && p.hp <= p.maxHp * 0.5) {
+      // Shattered shoulder: the arm goes limp and dangles, the zombie keeps coming.
+      for (const s of this.subtree(i)) { this.makeDynamic(s, dt); s.dangling = true; }
     }
     if (p.dynamic) p.body.applyImpulseAtPoint({ x: ix, y: iy, z: iz }, { x: px, y: py, z: pz }, true);
     return severed;
+  }
+
+  /** Corpse at rest → fixed bodies (no solver cost, still shootable). */
+  freeze(): void {
+    if (this.frozen || this.state !== 'dead') return;
+    for (const p of this.parts) p.body.setBodyType(RAPIER.RigidBodyType.Fixed, false);
+    this.frozen = true;
+  }
+
+  unfreeze(): void {
+    if (!this.frozen) return;
+    for (const p of this.parts) p.body.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
+    this.frozen = false;
+    this.restTime = 0;
   }
 
   /** Remove all physics objects. */
@@ -232,10 +443,7 @@ export class Zombie {
       this.w.removeRigidBody(p.body); // also removes its colliders and joints
     }
   }
-
-  /** Average speed of the ragdoll (to decide when it has come to rest). */
-  get centre(): THREE.Vector3 {
-    const t = this.parts[1].body.translation();
-    return v.set(t.x, t.y, t.z);
-  }
 }
+
+function clamp(v: number, r: [number, number]): number { return v < r[0] ? r[0] : v > r[1] ? r[1] : v; }
+function easeInOut(t: number): number { return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; }
