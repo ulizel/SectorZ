@@ -21,6 +21,8 @@ import { settings } from './core/settings';
 
 /** Bullets travel horizontally at this height (zombie chest, crate/barrel tops are 1.2 m). */
 const BULLET_HEIGHT = 1.15;
+/** Aim line length (m): short enough to stay on screen in portrait. */
+const AIM_LINE_LENGTH = 6;
 const v3 = new THREE.Vector3();
 const v3b = new THREE.Vector3();
 
@@ -240,7 +242,7 @@ export class Game {
     if (!show) return;
     const dx = this.aimX, dz = this.aimZ;
     const ox = px + dx * 0.45, oz = pz + dz * 0.45;
-    const maxLen = Math.min(14, this.player.weapon.def.range);
+    const maxLen = Math.min(AIM_LINE_LENGTH, this.player.weapon.def.range);
     const hit = this.physics.raycast(ox, BULLET_HEIGHT, oz, dx, 0, dz, maxLen,
       groups(Group.PLAYER, ALL & ~Group.PLAYER & ~Group.DEBRIS), this.player.collider);
     const len = hit ? hit.toi : maxLen;

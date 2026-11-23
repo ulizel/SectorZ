@@ -2,12 +2,12 @@
 const KEY = 'sectorz.settings';
 
 interface Settings {
-  /** Touch aim "pull" mode: drag back to aim forward (slingshot). Default on. */
+  /** Touch aim "pull" mode: drag back to aim forward (slingshot). Default off (push: stick points where you aim). */
   aimReverse: boolean;
 }
 
 function load(): Settings {
-  const s: Settings = { aimReverse: true };
+  const s: Settings = { aimReverse: false };
   try {
     const raw = localStorage.getItem(KEY);
     if (raw) Object.assign(s, JSON.parse(raw));

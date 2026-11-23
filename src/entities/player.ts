@@ -77,10 +77,9 @@ export class Player {
     // Actual velocity after collisions (so we don't "push" into walls forever).
     this.vx = m.x / dt; this.vz = m.z / dt;
 
-    // Face the aim direction, or the movement direction if not aiming.
+    // Facing follows the aim only; movement never changes where the player aims.
     let targetYaw = this.yaw;
     if (cmd.aimX !== 0 || cmd.aimZ !== 0) targetYaw = Math.atan2(cmd.aimX, cmd.aimZ);
-    else if (hasInput) targetYaw = Math.atan2(cmd.moveX, cmd.moveZ);
     this.yaw += angleDelta(this.yaw, targetYaw) * damp(PLAYER.turnSpeed, dt);
 
     const speed = Math.hypot(this.vx, this.vz);

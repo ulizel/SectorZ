@@ -78,7 +78,7 @@ async function boot(): Promise<void> {
   game.renderer.render();
 
   status.textContent = quality.name === 'mobile'
-    ? 'Left thumb: move · Right thumb: pull back to aim, release to shoot (SMG: hold) · ⇄ weapon'
+    ? 'Left thumb: move · Right thumb: drag to aim, release to shoot (SMG: hold) · ⇄ weapon'
     : 'WASD move · Mouse aim · Click fire · R reload · 1/2/Q switch weapon';
   startBtn.disabled = false;
   startBtn.textContent = quality.name === 'mobile' ? 'TAP TO PLAY' : 'CLICK TO PLAY';
