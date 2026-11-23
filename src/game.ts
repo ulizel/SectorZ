@@ -16,6 +16,8 @@ import { buildArena, type DynamicProp } from './world/arena';
 import { Hud } from './ui/hud';
 import { DebugOverlay } from './ui/debugOverlay';
 import type { WeaponEvent } from './weapons/weapon';
+import { AimModel } from './weapons/aimModel';
+import { settings } from './core/settings';
 
 /** Bullets travel horizontally at this height (zombie chest, crate/barrel tops are 1.2 m). */
 const BULLET_HEIGHT = 1.15;
@@ -39,6 +41,9 @@ export class Game {
   private readonly hud = new Hud();
   private readonly aimLine: THREE.Mesh;
   private readonly reticle: THREE.Group;
+  private readonly ghostLine: THREE.Mesh;
+  private readonly coneL: THREE.Mesh;
+  private readonly coneR: THREE.Mesh;
   private readonly marker: THREE.Mesh;
   /** Whether the aim line is currently shown (exposed to tests). */
   aimLineVisible = false;
@@ -49,6 +54,11 @@ export class Game {
   private aimX = 0; private aimZ = 1;
   private aiming = false;
   private stickAim = false;
+  private stickMag = 1;
+  private stickTarget = 0; // where the thumb points (radians)
+  private readonly aim = new AimModel();
+  /** Lift-to-fire shot waiting for the aim to arrive at the thumb direction. */
+  private pendingShot: { angle: number; t: number } | null = null;
   private recoil = 0;
   private visYaw = 0;
   private time = 0;
@@ -87,6 +97,18 @@ export class Game {
     }
     this.reticle.visible = false;
     scene.add(this.reticle);
+    // Ghost line: where the thumb points (the real aim line swings toward it).
+    const lineGeo = new THREE.BoxGeometry(1, 1, 1).translate(0, 0, 0.5);
+    this.ghostLine = new THREE.Mesh(lineGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.18, depthWrite: false, toneMapped: false }));
+    this.ghostLine.scale.set(0.02, 0.01, 1);
+    // Accuracy cone edges: open up when moving/turning/firing, close as aim settles.
+    const coneMat = new THREE.MeshBasicMaterial({ color: 0xff5a3c, transparent: true, opacity: 0.28, depthWrite: false, toneMapped: false });
+    this.coneL = new THREE.Mesh(lineGeo, coneMat);
+    this.coneR = new THREE.Mesh(lineGeo, coneMat);
+    this.coneL.scale.set(0.015, 0.01, 1);
+    this.coneR.scale.set(0.015, 0.01, 1);
+    this.ghostLine.visible = this.coneL.visible = this.coneR.visible = false;
+    scene.add(this.ghostLine, this.coneL, this.coneR);
     this.marker = new THREE.Mesh(new THREE.RingGeometry(0.42, 0.52, 24).rotateX(-Math.PI / 2),
       new THREE.MeshBasicMaterial({ color: 0x8fe0ff, transparent: true, opacity: 0.45, depthWrite: false }));
     this.marker.position.y = 0.02;
@@ -116,12 +138,14 @@ export class Game {
     const automatic = this.player.weapon.def.automatic;
     this.stickAim = !!raw.aimStick;
     if (raw.aimStick) {
-      // Touch aim stick: exact stick direction. Auto weapons fire while aiming;
-      // single-shot weapons fire once when the thumb lifts while aiming.
-      out.aimX = raw.aimStick.x; out.aimZ = raw.aimStick.y;
+      // Touch: "pull" mode (default) aims opposite the drag, like a slingshot.
+      const sgn = settings.aimReverse ? -1 : 1;
+      this.stickTarget = Math.atan2(raw.aimStick.x * sgn, raw.aimStick.y * sgn);
+      this.stickMag = raw.stickReleased ? 1 : raw.aimStickMag;
       out.aiming = raw.stickAiming;
       out.trigger = automatic && raw.stickAiming;
-      out.triggerTap = !automatic && raw.stickReleased;
+      // Single-shot: lifting queues a shot that fires once the aim arrives (or after a short wait).
+      if (!automatic && raw.stickReleased) this.pendingShot = { angle: this.stickTarget, t: AIM.pendingShotMax };
     } else if (raw.aimScreen && this.renderer.screenToGround(raw.aimScreen.x, raw.aimScreen.y, BULLET_HEIGHT, v3)) {
       const dx = v3.x - this.player.x, dz = v3.z - this.player.z;
       const d = Math.hypot(dx, dz);
@@ -139,19 +163,33 @@ export class Game {
     this.stats.ticks++;
     this.resolveCommand(this.input.sample(), this.cmd);
     const cmd = this.cmd;
-    if (this.stickAim) {
-      // Touch aim turns from the remembered aim toward the thumb at a limited rate (no snapping).
-      const cur = Math.atan2(this.aimX, this.aimZ);
-      const d = angleDelta(cur, Math.atan2(cmd.aimX, cmd.aimZ));
-      const maxStep = AIM.turnSpeed * dt;
-      const a = cur + Math.max(-maxStep, Math.min(maxStep, d));
-      this.aimX = cmd.aimX = Math.sin(a);
-      this.aimZ = cmd.aimZ = Math.cos(a);
-    } else if (cmd.aimX !== 0 || cmd.aimZ !== 0) { this.aimX = cmd.aimX; this.aimZ = cmd.aimZ; }
+    if (cmd.switchWeapon !== null) { this.player.switchWeapon(cmd.switchWeapon); this.pendingShot = null; }
+    const def = this.player.weapon.def;
 
+    // ── Aim with inertia (touch) or direct (mouse); remembered between drags.
+    const turning = this.stickAim || this.pendingShot !== null;
+    if (turning) {
+      const target = this.pendingShot ? this.pendingShot.angle : this.stickTarget;
+      this.aim.turnToward(target, this.pendingShot ? 1 : this.stickMag, def, dt);
+    } else if (cmd.aimX !== 0 || cmd.aimZ !== 0) {
+      this.aim.set(Math.atan2(cmd.aimX, cmd.aimZ), dt);
+    } else {
+      this.aim.hold(dt);
+    }
+    if (turning || cmd.aimX !== 0 || cmd.aimZ !== 0) { cmd.aimX = this.aim.x; cmd.aimZ = this.aim.z; }
+    this.aimX = this.aim.x; this.aimZ = this.aim.z;
+    if (this.pendingShot) {
+      this.pendingShot.t -= dt;
+      cmd.aiming = true; // keep the line up while the shot is pending
+      if (this.aim.errorTo(this.pendingShot.angle) < AIM.arriveTolerance || this.pendingShot.t <= 0) {
+        cmd.triggerTap = true;
+        this.pendingShot = null;
+      }
+    }
     this.aiming = cmd.aiming;
-    if (cmd.switchWeapon !== null) this.player.switchWeapon(cmd.switchWeapon);
+
     this.player.update(cmd, dt);
+    this.aim.updateBloom(def, Math.min(1, this.player.speed / PLAYER.moveSpeed), dt);
     this.player.weapon.update(dt, cmd.trigger, cmd.triggerTap, cmd.reload, this.weaponEvents);
     for (const e of this.weaponEvents) {
       const w = this.player.weapon.def.id;
@@ -165,8 +203,10 @@ export class Game {
 
   private fire(): void {
     const p = this.player, def = p.weapon.def;
+    const spread = this.aim.spread(def); // accuracy depends on movement, turning and recoil
     for (let i = 0; i < def.pellets; i++) {
-      const a = Math.atan2(this.aimX, this.aimZ) + (Math.random() * 2 - 1) * def.spread;
+      // Gaussian-ish spread (sum of two uniforms): most shots near the centre, few at the edge.
+      const a = this.aim.angle + ((Math.random() + Math.random()) - 1) * spread;
       const dx = Math.sin(a), dz = Math.cos(a);
       this.stats.shots++;
       const hit = this.physics.raycast(p.x, BULLET_HEIGHT, p.z, dx, 0, dz, def.range,
@@ -186,6 +226,7 @@ export class Game {
       }
       this.events.emit('shot', { x: ex, y: ey, z: ez, dx, dz, weapon: def.id });
     }
+    this.aim.onShot(def);
   }
 
   // ───────────────────────────── presentation ─────────────────────────────
@@ -194,7 +235,8 @@ export class Game {
   private updateAimLine(px: number, pz: number): void {
     const show = this.aiming;
     this.aimLineVisible = show;
-    this.aimLine.visible = this.reticle.visible = show;
+    this.aimLine.visible = this.reticle.visible = this.coneL.visible = this.coneR.visible = show;
+    this.ghostLine.visible = show && this.stickAim && this.aim.errorTo(this.stickTarget) > 0.03;
     if (!show) return;
     const dx = this.aimX, dz = this.aimZ;
     const ox = px + dx * 0.45, oz = pz + dz * 0.45;
@@ -205,9 +247,22 @@ export class Game {
     this.aimLine.position.set(ox, BULLET_HEIGHT, oz);
     this.aimLine.rotation.set(0, Math.atan2(dx, dz), 0);
     this.aimLine.scale.z = len;
+    const yaw = Math.atan2(dx, dz);
+    const spread = this.aim.spread(this.player.weapon.def);
+    for (const [m, sgn] of [[this.coneL, -1], [this.coneR, 1]] as const) {
+      m.position.set(ox, BULLET_HEIGHT, oz);
+      m.rotation.set(0, yaw + sgn * spread, 0);
+      m.scale.z = len;
+    }
+    if (this.ghostLine.visible) {
+      this.ghostLine.position.set(ox, BULLET_HEIGHT - 0.01, oz);
+      this.ghostLine.rotation.set(0, this.stickTarget, 0);
+      this.ghostLine.scale.z = maxLen;
+    }
     this.reticle.position.set(ox + dx * len, BULLET_HEIGHT + 0.02, oz + dz * len);
     this.reticle.rotation.y += 0.04;
-    const s = 1 + 0.15 * Math.sin(this.time * 10);
+    // Reticle size shows current accuracy at that distance.
+    const s = Math.max(0.6, Math.min(3, (spread * len) / 0.12)) * (1 + 0.06 * Math.sin(this.time * 10));
     this.reticle.scale.set(s, s, s);
   }
 
@@ -299,7 +354,7 @@ export class Game {
     return {
       x: p.x, z: p.z, yaw: p.yaw, health: p.health,
       ammo: p.weapon.ammo, reloading: p.weapon.reloading, weapon: p.weapon.def.id,
-      aimLineVisible: this.aimLineVisible, aimX: this.aimX, aimZ: this.aimZ,
+      aimLineVisible: this.aimLineVisible, aimX: this.aimX, aimZ: this.aimZ, bloom: this.aim.bloom,
       shots: this.stats.shots, propHits: this.stats.hits, ticks: this.stats.ticks,
       maxPropMove, maxImpactSpeed: this.stats.maxImpactSpeed,
       fps: this.debug.fps, physicsMs: this.debug.avgPhysicsMs,

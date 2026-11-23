@@ -65,3 +65,7 @@ body.touch #reload-btn, body.touch #switch-btn { display: block; }
   padding: 16px 30px; box-shadow: 0 5px 0 #8a2a1c; cursor: pointer; }
 #start:disabled { background: #555; box-shadow: 0 5px 0 #333; cursor: wait; }
 #status { opacity: 0.7; margin-top: 22px; font-size: 13px; }
+#aim-toggle { display: none; position: absolute; pointer-events: auto; right: calc(max(14px, env(safe-area-inset-right)) + 48px);
+  top: max(12px, env(safe-area-inset-top)); background: var(--panel); color: var(--ink);
+  border: 1px solid rgba(255,255,255,0.25); font: 11px var(--font); padding: 6px 8px; }
+body.touch #aim-toggle { display: block; }

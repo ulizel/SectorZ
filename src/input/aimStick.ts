@@ -15,6 +15,8 @@ export class AimStickLogic {
   aiming = false;
   dirX = 0;
   dirY = 0;
+  /** Deflection beyond the deadzone, 0..1 (light push = fine aim). */
+  mag = 0;
   private release: { x: number; y: number } | null = null;
 
   start(): void {
@@ -31,6 +33,7 @@ export class AimStickLogic {
       this.aiming = true;
       this.dirX = nx / m;
       this.dirY = ny / m;
+      this.mag = Math.min(1, (m - AIM_DEADZONE) / (1 - AIM_DEADZONE));
     } else {
       this.aiming = false;
     }

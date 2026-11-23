@@ -35,6 +35,8 @@ export interface RawInput {
   aimStick: { x: number; y: number } | null;
   /** Touch aim stick is past the deadzone right now. */
   stickAiming: boolean;
+  /** Touch aim stick deflection beyond the deadzone, 0..1. */
+  aimStickMag: number;
   /** Touch aim stick was lifted while aiming this tick (lift-to-fire). */
   stickReleased: boolean;
   reload: boolean;
@@ -43,5 +45,5 @@ export interface RawInput {
 
 export const emptyRaw = (): RawInput => ({
   moveX: 0, moveY: 0, aimScreen: null, mouseHeld: false, mousePressed: false,
-  aimStick: null, stickAiming: false, stickReleased: false, reload: false, switchWeapon: null,
+  aimStick: null, stickAiming: false, aimStickMag: 0, stickReleased: false, reload: false, switchWeapon: null,
 });

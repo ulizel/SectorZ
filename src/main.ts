@@ -2,6 +2,7 @@ import './style.css';
 import { initPhysics } from './physics/physicsWorld';
 import { pickQuality } from './core/quality';
 import type { Game } from './game';
+import { settings, saveSettings } from './core/settings';
 
 declare global {
   interface Window {
@@ -60,6 +61,16 @@ async function boot(): Promise<void> {
     quality,
   );
   api.game = game;
+  // Aim direction toggle: PULL (slingshot, default) or PUSH (stick points where you aim).
+  const aimBtn = document.getElementById('aim-toggle')!;
+  const label = () => { aimBtn.textContent = settings.aimReverse ? 'AIM: PULL' : 'AIM: PUSH'; };
+  label();
+  aimBtn.addEventListener('pointerdown', (e) => {
+    e.stopPropagation(); e.preventDefault();
+    settings.aimReverse = !settings.aimReverse;
+    saveSettings();
+    label();
+  });
   api.state = () => game.snapshot();
   // Render one frame behind the title card so the scene is visible immediately.
   game.loop.advance(0);
@@ -67,7 +78,7 @@ async function boot(): Promise<void> {
   game.renderer.render();
 
   status.textContent = quality.name === 'mobile'
-    ? 'Left thumb: move · Right thumb: drag to aim, lift to shoot (SMG: hold) · ⇄ switch weapon'
+    ? 'Left thumb: move · Right thumb: pull back to aim, release to shoot (SMG: hold) · ⇄ weapon'
     : 'WASD move · Mouse aim · Click fire · R reload · 1/2/Q switch weapon';
   startBtn.disabled = false;
   startBtn.textContent = quality.name === 'mobile' ? 'TAP TO PLAY' : 'CLICK TO PLAY';

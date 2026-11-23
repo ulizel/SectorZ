@@ -120,6 +120,7 @@ export class TouchSticks {
     } else if (this.aim.aiming) {
       out.stickAiming = true;
       out.aimStick = { x: this.aim.dirX, y: this.aim.dirY };
+      out.aimStickMag = this.aim.mag;
     }
     if (this.reloadQueued) { out.reload = true; this.reloadQueued = false; }
     if (this.switchQueued) { out.switchWeapon = -1; this.switchQueued = false; }

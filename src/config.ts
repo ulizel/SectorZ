@@ -23,8 +23,13 @@ export const CAMERA = {
   shakeDecay: 9,
 };
 
-/** Touch aim: the aim direction turns toward the thumb at this rate instead of snapping. */
-export const AIM = { turnSpeed: 5 }; // rad/s (~290°/s; a 180° turn takes ~0.6 s)
+/** Touch aim. Turn speeds/accuracy live per weapon (aimTurn, settle, recoilBloom in weapons/weapon.ts). */
+export const AIM = {
+  /** A lift-shot waits this long (s) for the aim to reach the thumb direction before firing anyway. */
+  pendingShotMax: 0.25,
+  /** "Arrived" tolerance for a pending lift-shot, radians (~2.3°). */
+  arriveTolerance: 0.04,
+};
 
 export const ARENA = { size: 44, wallHeight: 1.6 };
 

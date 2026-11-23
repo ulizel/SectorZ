@@ -192,12 +192,12 @@ async function phone(browser, deviceName, landscape) {
 
   // 3. Pistol lift-to-fire: dragging shows only the aim line; lifting fires one shot.
   await touch('touchStart', [R]);
-  await dragRight(70, 0);
+  await dragRight(-70, 0); // PULL mode (default): drag left → aim right
   await ticks(page, 40);
   const s3 = await state(page);
   check('dragging right stick shows aim line', s3.aimLineVisible === true);
   check('pistol: no shot while dragging', s3.shots === s2.shots, `shots=${s3.shots - s2.shots}`);
-  check('aim follows stick exactly (+X)', Math.abs(s3.aimX - 1) < 0.01 && Math.abs(s3.aimZ) < 0.01, `aim=(${s3.aimX.toFixed(2)},${s3.aimZ.toFixed(2)})`);
+  check('aim settles on the pulled direction (+X)', Math.abs(s3.aimX - 1) < 0.01 && Math.abs(s3.aimZ) < 0.01, `aim=(${s3.aimX.toFixed(2)},${s3.aimZ.toFixed(2)})`);
   await page.screenshot({ path: `${OUT}/${deviceName.replace(/\W+/g, '-')}${landscape ? '-landscape' : ''}-aiming.png` });
   await touch('touchEnd', []);
   await ticks(page, 6);
@@ -208,10 +208,10 @@ async function phone(browser, deviceName, landscape) {
   // 4. Shot cancel: drag out, back into the deadzone, release → nothing.
   await ticks(page, 15);
   await touch('touchStart', [R]);
-  await dragRight(0, 70);
+  await dragRight(0, -70); // pull up → aim down
   await ticks(page, 10);
   check('aim line visible (down)', (await state(page)).aimLineVisible);
-  for (let i = 4; i >= 0; i--) { await touch('touchMove', [{ ...R, y: R.y + i * 14 * 0.2 }]); await sleep(16); }
+  for (let i = 4; i >= 0; i--) { await touch('touchMove', [{ ...R, y: R.y - i * 14 * 0.2 }]); await sleep(16); }
   await ticks(page, 10);
   const s5 = await state(page);
   check('dragging back into deadzone hides aim line', s5.aimLineVisible === false);
@@ -224,11 +224,11 @@ async function phone(browser, deviceName, landscape) {
   await touch('touchStart', [L]);
   for (let i = 1; i <= 5; i++) { await touch('touchMove', [{ ...L, y: L.y - i * 14 }]); await sleep(16); }
   await touch('touchStart', [LU, R]);
-  await dragRight(-70, 0, LU);
+  await dragRight(70, 0, LU); // pull right → aim left
   await ticks(page, 30);
   const m1 = await state(page);
   check('multi-touch: moving while aiming left', m0.z - m1.z > 1 && m1.aimX < -0.99, `dz=${(m0.z - m1.z).toFixed(2)} aimX=${m1.aimX.toFixed(2)}`);
-  await touch('touchEnd', [{ ...R, x: R.x - 70 }]); // CDP: touchEnd lists the finger(s) being lifted
+  await touch('touchEnd', [{ ...R, x: R.x + 70 }]); // CDP: touchEnd lists the finger(s) being lifted
   await ticks(page, 6);
   const m2 = await state(page);
   check('multi-touch: lifting right thumb fires while still moving', m2.shots - m1.shots === 1, `shots=${m2.shots - m1.shots}`);
@@ -241,12 +241,12 @@ async function phone(browser, deviceName, landscape) {
   check('⇄ button switches to SMG', (await state(page)).weapon === 'smg');
   const f0 = await state(page);
   await touch('touchStart', [R]);
-  await dragRight(0, -70);
+  await dragRight(0, 70); // pull down → aim up
   await ticks(page, 60);
   const f1 = await state(page);
   check('SMG: fires continuously while aimed', f1.shots - f0.shots >= 9, `shots=${f1.shots - f0.shots}`);
   await page.screenshot({ path: `${OUT}/${deviceName.replace(/\W+/g, '-')}${landscape ? '-landscape' : ''}-smg.png` });
-  for (let i = 4; i >= 0; i--) { await touch('touchMove', [{ ...R, y: R.y - i * 14 * 0.2 }]); await sleep(16); }
+  for (let i = 4; i >= 0; i--) { await touch('touchMove', [{ ...R, y: R.y + i * 14 * 0.2 }]); await sleep(16); }
   await ticks(page, 6);
   const f2 = await state(page);
   await ticks(page, 30);
