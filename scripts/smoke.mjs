@@ -31,6 +31,14 @@ async function waitForServer() {
 }
 
 const state = (page) => page.evaluate(() => window.__SECTORZ__.state());
+/**
+ * Wait for N *simulation* ticks (60 per game-second). Wall-clock sleeps are flaky because slow
+ * CI GPUs drop below 15 FPS, where the loop's catch-up cap makes game time run slower than real time.
+ */
+async function ticks(page, n) {
+  const start = (await state(page)).ticks;
+  await page.waitForFunction((t) => window.__SECTORZ__.state().ticks >= t, start + n, { timeout: 60000, polling: 50 });
+}
 async function waitReady(page) {
   await page.waitForFunction(() => window.__SECTORZ__?.ready === true, null, { timeout: 30000 });
 }
@@ -41,6 +49,14 @@ const worldToScreen = (page, x, y, z) => page.evaluate(([x, y, z]) => {
   return { x: (v.x + 1) / 2 * innerWidth, y: (1 - v.y) / 2 * innerHeight };
 }, [x, y, z]);
 
+/** SMOKE_CPU_THROTTLE=4 simulates a slow device/CI runner (proves tests are frame-rate independent). */
+const THROTTLE = Number(process.env.SMOKE_CPU_THROTTLE || 1);
+async function throttle(page, ctx) {
+  if (THROTTLE <= 1) return;
+  const cdp = await (ctx ?? page.context()).newCDPSession(page);
+  await cdp.send('Emulation.setCPUThrottlingRate', { rate: THROTTLE });
+}
+
 const launchArgs = { args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--autoplay-policy=no-user-gesture-required'] };
 
 async function desktop(browser) {
@@ -49,6 +65,7 @@ async function desktop(browser) {
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+  await throttle(page);
   await page.goto(`${BASE}?quality=desktop`);
   await page.waitForSelector('#start:not([disabled])', { timeout: 30000 });
   await page.screenshot({ path: `${OUT}/desktop-title.png` });
@@ -74,10 +91,10 @@ async function desktop(browser) {
     try { const t = await worldToScreen(page, 6, 1.15, -1); await page.mouse.move(t.x, t.y); } catch {}
   }, 150);
   await page.mouse.down();
-  await sleep(1500);
+  await ticks(page, 90); // 1.5 game-seconds of fire
   await page.mouse.up();
   clearInterval(keepAim);
-  await sleep(1200);
+  await ticks(page, 60);
   const s1 = await state(page);
   check('mouse fire produces shots', s1.shots >= 5, `shots=${s1.shots}`);
   check('ammo consumed / reloading', s1.ammo < 12 || s1.reloading, `ammo=${s1.ammo}`);
@@ -87,23 +104,24 @@ async function desktop(browser) {
 
   // WASD movement: hold W for 1 s → move toward -Z by ~5 m.
   await page.keyboard.down('KeyW');
-  await sleep(1000);
+  await ticks(page, 60);
   await page.keyboard.up('KeyW');
-  await sleep(200);
+  await ticks(page, 12);
   const s2 = await state(page);
   check('W moves the player up-screen (-Z)', s1.z - s2.z > 3, `dz=${(s1.z - s2.z).toFixed(2)}`);
   await page.keyboard.down('KeyD');
-  await sleep(600);
+  await ticks(page, 36);
   await page.keyboard.up('KeyD');
+  await ticks(page, 12);
   const s3 = await state(page);
   check('D moves the player right (+X)', s3.x - s2.x > 1.5, `dx=${(s3.x - s2.x).toFixed(2)}`);
 
   // Manual reload.
   await page.keyboard.press('KeyR');
-  await sleep(100);
+  await ticks(page, 3);
   const s4 = await state(page);
   check('R reloads (or mag already full)', s4.reloading || s4.ammo === 12, `ammo=${s4.ammo} reloading=${s4.reloading}`);
-  await sleep(1500);
+  await ticks(page, 90);
   await page.screenshot({ path: `${OUT}/desktop-moved.png` });
   check('no JS errors (desktop)', errors.length === 0 && (await page.evaluate(() => window.__SECTORZ__.errors.length)) === 0, errors.join(' | '));
   await page.close();
@@ -120,6 +138,7 @@ async function phone(browser, deviceName, landscape) {
   const page = await ctx.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
+  await throttle(page, ctx);
   await page.goto(BASE);
   await page.waitForSelector('#start:not([disabled])', { timeout: 30000 });
   check('touch device detected → mobile quality + touch UI', await page.evaluate(() => document.body.classList.contains('touch')));
@@ -136,25 +155,25 @@ async function phone(browser, deviceName, landscape) {
   // Left thumb: push up to walk toward -Z.
   await touch('touchStart', [L]);
   for (let i = 1; i <= 5; i++) { await touch('touchMove', [{ ...L, y: L.y - i * 14 }]); await sleep(16); }
-  await sleep(900);
+  await ticks(page, 54);
   // Add right thumb: aim right and fire while still moving.
   await touch('touchStart', [{ ...L, y: L.y - 70 }, R]);
   for (let i = 1; i <= 5; i++) { await touch('touchMove', [{ ...L, y: L.y - 70 }, { ...R, x: R.x + i * 14 }]); await sleep(16); }
-  await sleep(1200);
+  await ticks(page, 72);
   await page.screenshot({ path: `${OUT}/${deviceName.replace(/\W+/g, '-')}${landscape ? '-landscape' : ''}.png` });
   await touch('touchEnd', []);
-  await sleep(200);
+  await ticks(page, 12);
   const s1 = await state(page);
   console.log(`    (fps in headless software GL: ${s1.fps.toFixed(1)})`);
   check('left stick moves player up (-Z)', s0.z - s1.z > 3, `dz=${(s0.z - s1.z).toFixed(2)}`);
   check('right stick fires', s1.shots >= 4, `shots=${s1.shots}`);
   check('right stick aims (+X → yaw≈+π/2)', Math.abs(s1.yaw - Math.PI / 2) < 0.3, `yaw=${s1.yaw.toFixed(2)}`);
   const s2 = await state(page);
-  await sleep(300);
+  await ticks(page, 18);
   const s3 = await state(page);
   check('player stops when thumbs lift', Math.hypot(s3.x - s2.x, s3.z - s2.z) < 0.05);
   await page.tap('#reload-btn');
-  await sleep(100);
+  await ticks(page, 3);
   const s4 = await state(page);
   check('reload button works', s4.reloading || s4.ammo === 12, `ammo=${s4.ammo}`);
   check('no JS errors (phone)', errors.length === 0, errors.join(' | '));
