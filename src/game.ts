@@ -48,7 +48,7 @@ export class Game {
   private visYaw = 0;
   private time = 0;
   private readonly weaponEvents: WeaponEvent[] = [];
-  readonly stats = { shots: 0, hits: 0, ticks: 0 };
+  readonly stats = { shots: 0, hits: 0, ticks: 0, maxImpactSpeed: 0 };
 
   constructor(container: HTMLElement, touchLayer: HTMLElement, reloadBtn: HTMLElement, readonly quality: QualityPreset) {
     this.renderer = new Renderer(container, quality);
@@ -145,6 +145,8 @@ export class Game {
         if (dynamic) {
           this.stats.hits++;
           body!.applyImpulseAtPoint({ x: dx * def.impulse, y: def.impulse * 0.15, z: dz * def.impulse }, hit.point, true);
+          const v = body!.linvel();
+          this.stats.maxImpactSpeed = Math.max(this.stats.maxImpactSpeed, Math.hypot(v.x, v.y, v.z));
         }
         this.events.emit('hit', { x: ex, y: ey, z: ez, nx: hit.normal.x, ny: hit.normal.y, nz: hit.normal.z, dynamic });
       }
@@ -256,7 +258,7 @@ export class Game {
       x: p.x, z: p.z, yaw: p.yaw, health: p.health,
       ammo: p.weapon.ammo, reloading: p.weapon.reloading,
       shots: this.stats.shots, propHits: this.stats.hits, ticks: this.stats.ticks,
-      maxPropMove,
+      maxPropMove, maxImpactSpeed: this.stats.maxImpactSpeed,
       fps: this.debug.fps, physicsMs: this.debug.avgPhysicsMs,
       bodies: this.physics.bodyCount,
     };
