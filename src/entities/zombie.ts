@@ -55,6 +55,8 @@ const CCD_PARTS = new Set<PartName>(['head', 'forearmL', 'forearmR', 'upperArmL'
 export const ZOMBIE_MAX_HP = 100;
 /** Per-hit instant jolt (rad/s per unit of hit strength) for the struck limb and the upper body. */
 const KICK_LIMB = 4, KICK_BODY = 2.2;
+/** Impulse within ~0.05 s that knocks a zombie off its feet (a close shotgun blast; not pistol/SMG). */
+export const KNOCKDOWN_IMPULSE = 45;
 const PART_IDX = Object.fromEntries(HUMANOID.map((d, i) => [d.name, i])) as Record<PartName, number>;
 /**
  * Animated (kinematic) zombie parts don't physically touch props: a kinematic body has infinite
@@ -127,6 +129,8 @@ export class Zombie {
   readonly pushV = new THREE.Vector3();
   /** Recent-hit heat: high under sustained fire → leans into the fire and slows. */
   private heat = 0;
+  /** Impulse received in the last instant: a big burst (shotgun) knocks the zombie down. */
+  private burstImpulse = 0;
   /** 0..1: being hosed by sustained fire. */
   underFire = 0;
   // ── Locomotion / AI-facing state (set by the AI system each tick) ──
@@ -294,6 +298,7 @@ export class Zombie {
     s.x += s.vx * dt; s.z += s.vz * dt;
     this.pushV.multiplyScalar(Math.exp(-4 * dt));
     this.heat *= Math.exp(-2 * dt);
+    this.burstImpulse *= Math.exp(-20 * dt);
     // ≳5 hits/s counts as sustained fire; eased so the lean-in builds up instead of jumping per hit.
     const uf = Math.min(1, Math.max(0, (this.heat - 2.5) / 3));
     this.underFire += (uf - this.underFire) * (1 - Math.exp(-3 * dt));
@@ -529,6 +534,8 @@ export class Zombie {
         this.sway.vz -= k * KICK_BODY * left;
         this.pushV.x += ix * 0.06 * flinch; this.pushV.z += iz * 0.06 * flinch;
         this.heat += 1;
+        this.burstImpulse += impulse;
+        if (this.burstImpulse > KNOCKDOWN_IMPULSE) this.knockDown(dt);
       }
       if (this.hp <= 0) this.kill(dt);
     }

@@ -8,6 +8,7 @@ export const LOOT = {
   ammoChance: 0.3,
   healthChance: 0.12,
   ammoAmount: 30, // SMG rounds
+  shellAmount: 6, // shotgun shells
   healthAmount: 25,
   life: 25, // s before it disappears (blinks the last 5 s)
   radius: 1.0, // walk within this to collect

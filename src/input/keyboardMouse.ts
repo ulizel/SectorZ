@@ -16,6 +16,7 @@ export class KeyboardMouse {
       if (e.code === 'KeyR') this.reloadQueued = true;
       if (e.code === 'Digit1') this.switchQueued = 0;
       if (e.code === 'Digit2') this.switchQueued = 1;
+      if (e.code === 'Digit3') this.switchQueued = 2;
       if (e.code === 'KeyQ') this.switchQueued = -1;
       if (e.code === 'Space') this.pressedQueued = true;
       this.active = true;

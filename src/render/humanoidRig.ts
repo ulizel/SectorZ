@@ -45,21 +45,42 @@ export class HumanoidRig {
       p[`forearm${s}`].add(box(0.1, 0.08, 0.1, look.skin, 0, -0.3, 0));
       p[`shin${s}`].add(box(0.16, 0.1, 0.24, look.boots, 0, -0.33, 0.04));
     }
-    // Pistol in the right hand: barrel runs along the forearm's -Y (forward when aiming).
-    const gun = new THREE.Group();
-    gun.position.set(0, -0.32, 0);
-    gun.add(box(0.07, 0.26, 0.1, PAL.gun, 0, -0.1, 0.02));
-    gun.add(box(0.06, 0.08, 0.14, PAL.gunAccent, 0, 0.0, -0.06));
-    this.muzzle.position.set(0, -0.24, 0.02);
-    gun.add(this.muzzle);
-    p.forearmR.add(gun);
+    // Guns in the right hand: barrels run along the forearm's -Y (forward when aiming).
+    const gun = (parts: [number, number, number, number, number, number, number][], muzzleY: number) => {
+      const g = new THREE.Group();
+      g.position.set(0, -0.32, 0);
+      for (const [w, h, d, c, x, y, z] of parts) g.add(box(w, h, d, c, x, y, z));
+      p.forearmR.add(g);
+      return { g, muzzleY };
+    };
+    this.guns = {
+      pistol: gun([[0.07, 0.26, 0.1, PAL.gun, 0, -0.1, 0.02], [0.06, 0.08, 0.14, PAL.gunAccent, 0, 0.0, -0.06]], -0.24),
+      smg: gun([[0.07, 0.4, 0.11, PAL.gun, 0, -0.16, 0.02], [0.06, 0.1, 0.16, PAL.gunAccent, 0, 0.0, -0.07], [0.05, 0.08, 0.2, PAL.gun, 0, -0.12, -0.1]], -0.37),
+      shotgun: gun([[0.08, 0.62, 0.09, PAL.gun, 0, -0.26, 0.03], [0.07, 0.2, 0.08, 0x6e4a27, 0, 0.05, -0.02], [0.09, 0.14, 0.11, 0x5a3c22, 0, -0.32, -0.05]], -0.58),
+    };
+    this.pumpGrip = this.guns.shotgun.g.children[2];
+    this.setWeapon('pistol');
+  }
+
+  private guns!: Record<string, { g: THREE.Group; muzzleY: number }>;
+  private pumpGrip!: THREE.Object3D;
+  private weaponId = '';
+
+  /** Show the right gun model and move the muzzle point to its barrel end. */
+  setWeapon(id: string): void {
+    if (id === this.weaponId || !this.guns[id]) return;
+    this.weaponId = id;
+    for (const [k, v] of Object.entries(this.guns)) v.g.visible = k === id;
+    const gun = this.guns[id];
+    gun.g.add(this.muzzle);
+    this.muzzle.position.set(0, gun.muzzleY, 0.02);
   }
 
   /**
    * Procedural animation. `phase` advances with distance walked; `move` is 0..1 speed;
    * `strafe` is the movement direction relative to facing (radians); `recoil` 0..1 kick.
    */
-  pose(phase: number, move: number, strafe: number, recoil: number, time: number, reload = 0): void {
+  pose(phase: number, move: number, strafe: number, recoil: number, time: number, reload = 0, pump = 0): void {
     const p = this.parts;
     const swing = Math.sin(phase) * 0.75 * move;
     // Legs swing along the movement direction relative to the body.
@@ -82,7 +103,8 @@ export class HumanoidRig {
     p.upperArmR.rotation.set(-Math.PI / 2 + 0.22 - kick + r * 0.55, 0.42 + r * 0.35, 0);
     p.forearmR.rotation.set(-kick * 0.6 - r * 0.5, 0, r * 0.5);
     p.upperArmL.rotation.set(-Math.PI / 2 + 0.37 - kick * 0.6 + r * (1.0 + dip * 0.6), -0.75 + r * 0.5, 0);
-    p.forearmL.rotation.set(-0.35 - r * 0.8, 0, 0);
+    p.forearmL.rotation.set(-0.35 - r * 0.8 + pump * 0.45, 0, 0); // pump: support hand racks back
+    if (this.pumpGrip) this.pumpGrip.position.y = -0.32 + pump * 0.12;
     p.torso.position.z = -kick * 0.09;
     p.head.rotation.x += r * 0.35; // glance down at the gun
   }

@@ -377,6 +377,48 @@ async function survival(browser) {
   await page.close();
 }
 
+async function arsenal(browser) {
+  console.log('\n[Shotgun + explosive barrels, desktop]');
+  const page = await browser.newPage({ viewport: { width: 1000, height: 640 } });
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await throttle(page);
+  await page.goto(`${BASE}?lab&quality=desktop`);
+  await waitReady(page);
+  await page.evaluate(() => { const g = window.__SECTORZ__.game; g.ai.enabled = false; g.zombies.clear(); g.zombies.spawn(g.player.x, g.player.z + 3, Math.PI); });
+  await page.keyboard.press('Digit3');
+  await ticks(page, 5);
+  check('key 3 switches to shotgun', (await state(page)).weapon === 'shotgun');
+  const s = await state(page);
+  const aim = await worldToScreen(page, s.x, 1.15, s.z + 3);
+  for (let i = 0; i < 3; i++) { await page.mouse.move(aim.x, aim.y); await sleep(300); }
+  const a = await state(page);
+  await page.mouse.down(); await ticks(page, 2); await page.mouse.up();
+  await ticks(page, 20);
+  const b = await state(page);
+  check('one shotgun blast fires 12 pellets', b.shots - a.shots === 12, `pellets=${b.shots - a.shots}`);
+  const zs = await page.evaluate(() => window.__SECTORZ__.game.zombies.zombies.map((z) => z.state));
+  check('close blast knocks the zombie down (or kills it)', zs.length > 0 && zs.every((st) => st !== 'alive'), `states=${zs.join(',')} hits=${b.zombieHits - a.zombieHits}`);
+  await page.screenshot({ path: `${OUT}/shotgun.png` });
+  // Barrels: two explosives 2 m apart, a zombie beside them, player 3.5 m away; shoot-ignite one.
+  const c = await state(page);
+  await page.evaluate(() => {
+    const g = window.__SECTORZ__.game, p = g.player;
+    g.zombies.clear();
+    const b1 = g.addBarrel(p.x + 3.5, p.z, true);
+    g.addBarrel(p.x + 5.5, p.z, true);
+    g.zombies.spawn(p.x + 4.5, p.z + 1, 0);
+    g.ignite(b1);
+  });
+  await ticks(page, 120);
+  const d = await state(page);
+  check('shot barrel explodes and chains to the next one', d.barrels - c.barrels >= 2, `exploded=${d.barrels - c.barrels}`);
+  check('zombie next to the barrels is killed', d.kills > c.kills, `kills ${c.kills}→${d.kills}`);
+  check('player standing close takes splash damage', d.damageTaken > c.damageTaken, `damage=${(d.damageTaken - c.damageTaken).toFixed(0)}`);
+  check('no JS errors (arsenal)', errors.length === 0, errors.join(' | '));
+  await page.close();
+}
+
 try {
   await waitForServer();
   const browser = await chromium.launch(launchArgs);
@@ -385,6 +427,7 @@ try {
   if (!only || only === 'desktop') await desktop(browser);
   if (!only || only === 'lab') await ragdollLab(browser);
   if (!only || only === 'survival') await survival(browser);
+  if (!only || only === 'arsenal') await arsenal(browser);
   if (!only || only === 'phone') { await phone(browser, 'iPhone 13', false); await phone(browser, 'Pixel 7', true); }
   await browser.close();
 } catch (e) {

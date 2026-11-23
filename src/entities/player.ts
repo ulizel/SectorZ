@@ -22,7 +22,7 @@ export class Player {
   walkPhase = 0;
   /** Movement speed multiplier set by the game each tick (crowds slow you; pinning sets 0). */
   slowMul = 1;
-  readonly weapons = [new WeaponState(WEAPONS.pistol), new WeaponState(WEAPONS.smg)];
+  readonly weapons = [new WeaponState(WEAPONS.pistol), new WeaponState(WEAPONS.smg), new WeaponState(WEAPONS.shotgun)];
   weaponIndex = 0;
   get weapon(): WeaponState { return this.weapons[this.weaponIndex]; }
 

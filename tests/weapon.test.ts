@@ -133,3 +133,23 @@ describe('reserve ammo', () => {
     expect(new WeaponState(WEAPONS.pistol).reserve).toBe(Infinity);
   });
 });
+
+describe('shotgun (shell reload)', () => {
+  it('reloads one shell at a time and can fire mid-reload', () => {
+    const w = new WeaponState(WEAPONS.shotgun);
+    w.ammo = 0;
+    const ev: WeaponEvent[] = [];
+    w.update(DT, false, false, true, ev); // start reload
+    expect(w.reloading).toBe(true);
+    let shells = 0;
+    for (let t = 0; t < WEAPONS.shotgun.reloadTime * 2.5; t += DT) { w.update(DT, false, false, false, ev); shells += ev.filter((e) => e === 'shellIn').length; }
+    expect(shells).toBe(2);
+    expect(w.ammo).toBe(2);
+    expect(w.reloading).toBe(true); // still loading
+    w.update(DT, false, true, false, ev); // tap fire mid-reload
+    expect(ev).toContain('fired');
+    expect(w.ammo).toBe(1);
+    expect(w.reloading).toBe(false);
+  });
+  it('has 12 pellets', () => expect(WEAPONS.shotgun.pellets).toBe(12));
+});

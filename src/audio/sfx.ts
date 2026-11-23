@@ -92,6 +92,10 @@ export class Sfx {
   pickup(): void { this.tone(660, 990, 0.08, 0.2, 'square'); this.tone(990, 1320, 0.1, 0.18, 'square', 0.08); }
   waveStart(): void { this.tone(110, 90, 0.9, 0.5, 'sawtooth'); this.tone(165, 120, 0.9, 0.3, 'sawtooth', 0.1); this.burst(0.6, 300, 0.7, 0.3); }
   waveClear(): void { [523, 659, 784].forEach((f, i) => this.tone(f, f, 0.18, 0.18, 'triangle', i * 0.12)); }
+  shotgun(): void { this.burst(0.35, 1400, 0.6, 1.2); this.burst(0.08, 6000, 0.5, 0.5, 'highpass'); this.tone(90, 32, 0.3, 1.2); }
+  shellIn(): void { this.burst(0.04, 2200, 5, 0.35, 'bandpass'); this.tone(500, 420, 0.03, 0.08, 'square', 0.02); }
+  pump(delay = 0): void { this.burst(0.05, 1500, 4, 0.4, 'bandpass', delay); this.burst(0.06, 900, 4, 0.4, 'bandpass', delay + 0.12); }
+  hiss(): void { this.burst(0.9, 5000, 0.8, 0.25, 'highpass'); }
   dismember(): void { this.burst(0.18, 600, 1, 0.6); this.tone(80, 40, 0.2, 0.5); this.burst(0.25, 1800, 0.8, 0.25, 'lowpass', 0.05); }
   explosion(): void {
     this.burst(0.9, 600, 0.5, 1.2);

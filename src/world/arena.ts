@@ -11,6 +11,24 @@ export interface DynamicProp {
   kind: 'crate' | 'barrel';
   /** Footprint radius (m) for AI avoidance. */
   radius: number;
+  /** Explodes when shot / caught in a blast. */
+  explosive?: boolean;
+  /** Seconds until it goes off (set once ignited). */
+  fuse?: number;
+}
+
+/** A barrel prop (plain or explosive). Exported so the game can drop fresh ones between waves. */
+export function spawnBarrel(scene: THREE.Scene, physics: PhysicsWorld, x: number, z: number, explosive: boolean): DynamicProp {
+  const w = physics.world;
+  const body = w.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(x, 0.6, z).setLinearDamping(0.2).setAngularDamping(0.5));
+  const col = w.createCollider(RAPIER.ColliderDesc.cylinder(0.6, 0.36).setDensity(PROPS.barrelDensity).setFriction(0.6).setRestitution(0.2)
+    .setCollisionGroups(groups(Group.PROP, ALL)), body);
+  physics.materials.set(col.handle, 'metal');
+  // One merged 8-sided mesh (barrel + raised bands), one draw call.
+  const g = new THREE.Mesh(barrelGeo(explosive), barrelMaterial());
+  g.castShadow = g.receiveShadow = true;
+  scene.add(g);
+  return { body, mesh: g, kind: 'barrel', radius: 0.4, explosive };
 }
 
 interface Block { x: number; y: number; z: number; w: number; h: number; d: number; color: number }
@@ -115,24 +133,13 @@ export function buildArena(scene: THREE.Scene, physics: PhysicsWorld, seed = 7):
     scene.add(g);
     props.push({ body, mesh: g, kind: 'crate', radius: sz * 0.62 });
   };
-  const barrel = (x: number, z: number) => {
-    const body = w.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(x, 0.6, z).setLinearDamping(0.2).setAngularDamping(0.5));
-    const barrelCol = w.createCollider(RAPIER.ColliderDesc.cylinder(0.6, 0.36).setDensity(PROPS.barrelDensity).setFriction(0.6).setRestitution(0.2)
-      .setCollisionGroups(groups(Group.PROP, ALL)), body);
-    physics.materials.set(barrelCol.handle, 'metal');
-    // One merged 8-sided mesh (barrel + raised bands), one draw call.
-    const g = new THREE.Mesh(barrelGeo(), barrelMaterial());
-    g.castShadow = g.receiveShadow = true;
-    scene.add(g);
-    props.push({ body, mesh: g, kind: 'barrel', radius: 0.4 });
-  };
-
   for (const [x, z] of [[4, -4], [-4, 4], [5, 9], [-6, -10], [12, -3], [-12, 3]] as const) {
     crate(x, 0.6, z, 1.2);
     if (r() < 0.6) crate(x + 0.1, 1.8, z - 0.05, 1.2);
   }
   crate(-3, 0.45, -3, 0.9); crate(-2.2, 0.45, -3.3, 0.9); crate(-2.6, 1.35, -3.15, 0.9);
-  for (const [x, z] of [[6, -1], [6.8, -1.6], [-5, 1], [2, 14], [-15, -6], [15, 6]] as const) barrel(x, z);
+  // Every other barrel is explosive (hazard stripe).
+  [[6, -1], [6.8, -1.6], [-5, 1], [2, 14], [-15, -6], [15, 6]].forEach(([x, z], i) => props.push(spawnBarrel(scene, physics, x, z, i % 2 === 0)));
 
   return props;
 }
@@ -212,13 +219,16 @@ function crateMaterial(): THREE.MeshLambertMaterial {
   return crateMat;
 }
 
-let barrelG: THREE.BufferGeometry | null = null;
-function barrelGeo(): THREE.BufferGeometry {
-  if (barrelG) return barrelG;
+const barrelGs: Partial<Record<'plain' | 'explosive', THREE.BufferGeometry>> = {};
+function barrelGeo(explosive: boolean): THREE.BufferGeometry {
+  const key = explosive ? 'explosive' : 'plain';
+  const cached = barrelGs[key];
+  if (cached) return cached;
   const col = new THREE.Color();
   const make = (r: number, h: number, y: number, c: number) => {
+    const isBody = h > 1;
     // Open-ended bands (no caps hidden inside the barrel = fewer triangles).
-    const g = new THREE.CylinderGeometry(r, r, h, 8, 1, c !== PAL.barrel).translate(0, y, 0).toNonIndexed();
+    const g = new THREE.CylinderGeometry(r, r, h, 8, 1, !isBody).translate(0, y, 0).toNonIndexed();
     g.deleteAttribute('uv');
     col.setHex(c);
     const n = g.attributes.position.count, arr = new Float32Array(n * 3);
@@ -226,9 +236,14 @@ function barrelGeo(): THREE.BufferGeometry {
     g.setAttribute('color', new THREE.BufferAttribute(arr, 3));
     return g;
   };
-  barrelG = mergeGeometries([make(0.36, 1.2, 0, PAL.barrel), make(0.375, 0.08, -0.35, PAL.barrelBand), make(0.375, 0.08, 0.35, PAL.barrelBand)])!;
-  barrelG.computeVertexNormals(); // flat 8-sided look comes from the non-indexed faces
-  return barrelG;
+  // Explosive: bright red with a wide yellow hazard stripe; plain: rust red with dark bands.
+  const parts = explosive
+    ? [make(0.36, 1.2, 0, 0xd02a1c), make(0.375, 0.26, 0.05, 0xf2c230), make(0.375, 0.05, -0.42, 0x2a2320), make(0.375, 0.05, 0.42, 0x2a2320)]
+    : [make(0.36, 1.2, 0, PAL.barrel), make(0.375, 0.08, -0.35, PAL.barrelBand), make(0.375, 0.08, 0.35, PAL.barrelBand)];
+  const g = mergeGeometries(parts)!;
+  g.computeVertexNormals(); // flat 8-sided look comes from the non-indexed faces
+  barrelGs[key] = g;
+  return g;
 }
 
 let barrelMat: THREE.MeshLambertMaterial | null = null;

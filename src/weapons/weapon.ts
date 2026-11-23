@@ -37,6 +37,13 @@ export interface WeaponDef {
   limbMult: number;
   /** Hit-reaction strength on zombies (pistol: clear jolt per shot; SMG: small tremors that build). */
   flinch: number;
+  /** Bullet trace thickness (m) and trail length (m). */
+  traceWidth: number;
+  traceLength: number;
+  /** Damage/force fall off linearly from falloffStart to `range`, down to 25%. */
+  falloffStart: number;
+  /** Reload one shell at a time (reloadTime = per shell); can fire mid-reload. */
+  shellReload: boolean;
 }
 
 export const WEAPONS: Record<string, WeaponDef> = {
@@ -46,6 +53,7 @@ export const WEAPONS: Record<string, WeaponDef> = {
     aimTurn: 9, settle: 3.5, recoilBloom: 1.2, aimKick: 0,
     recoilPattern: [0], penetration: 0.7, pushback: 0.9, activeWindow: [0.45, 0.62], casingSound: false, reserveStart: Infinity, reserveMax: Infinity,
     bulletSpeed: 70, vSpread: 0.06, limbMult: 1, flinch: 1.8,
+    traceWidth: 0.06, traceLength: 0.9, falloffStart: 40, shellReload: false,
   },
   smg: {
     id: 'smg', name: 'SMG', damage: 14, fireInterval: 0.085, magSize: 30, reloadTime: 1.6,
@@ -54,10 +62,20 @@ export const WEAPONS: Record<string, WeaponDef> = {
     recoilPattern: [0.012, 0.016, 0.014, 0.008, -0.004, -0.014, -0.018, -0.012, 0.002, 0.014, 0.018, 0.01],
     penetration: 0.45, pushback: 0.35, activeWindow: [0.5, 0.64], casingSound: false, reserveStart: 60, reserveMax: 180,
     bulletSpeed: 80, vSpread: 0, limbMult: 1.6, flinch: 0.65,
+    traceWidth: 0.05, traceLength: 0.75, falloffStart: 32, shellReload: false,
+  },
+  shotgun: {
+    id: 'shotgun', name: 'Shotgun', damage: 16, fireInterval: 0.85, magSize: 6, reloadTime: 0.45,
+    spread: 0.11, range: 22, impulse: 9, pellets: 12, automatic: false, shake: 0.55, recoil: 1,
+    aimTurn: 7, settle: 3, recoilBloom: 1.6, aimKick: 0.03,
+    recoilPattern: [0], penetration: 0.4, pushback: 2.2, activeWindow: [2, 2], casingSound: false,
+    reserveStart: 18, reserveMax: 36,
+    bulletSpeed: 65, vSpread: 0.05, limbMult: 1.4, flinch: 1.2,
+    traceWidth: 0.05, traceLength: 0.55, falloffStart: 6, shellReload: true,
   },
 };
 
-export type WeaponEvent = 'fired' | 'reloadStart' | 'reloadEnd' | 'dry' | 'activeReload' | 'reloadFumble';
+export type WeaponEvent = 'fired' | 'reloadStart' | 'reloadEnd' | 'dry' | 'activeReload' | 'reloadFumble' | 'shellIn';
 
 /** A single-shot tap arriving slightly early (during cooldown) is remembered this long. */
 const TAP_BUFFER = 0.15;
@@ -122,8 +140,16 @@ export class WeaponState {
       this.reloadLeft -= dt;
       if (this.reloadLeft <= 0) {
         this.reloadLeft = 0;
-        this.refill();
-        out.push('reloadEnd');
+        if (this.def.shellReload) {
+          // One shell in; keep loading while there's room and ammo.
+          this.ammo++; this.reserve--;
+          out.push('shellIn');
+          if (this.ammo < this.def.magSize && this.reserve > 0) this.reloadLeft = this.def.reloadTime;
+          else out.push('reloadEnd');
+        } else {
+          this.refill();
+          out.push('reloadEnd');
+        }
       }
       else if (reloadRequest && !this.activeTried) this.tryActiveReload(out);
     } else if (reloadRequest && this.canReload) {
@@ -131,6 +157,8 @@ export class WeaponState {
     }
 
     const wants = this.def.automatic ? trigger || this.tapBuffer > 0 : this.tapBuffer > 0;
+    // Shell-by-shell reloads can be interrupted to fire the shells already loaded.
+    if (wants && this.reloading && this.def.shellReload && this.ammo > 0) this.reloadLeft = 0;
     if (!wants || this.reloading || this.cooldown > 0) {
       if (this.reloading) this.tapBuffer = 0; // taps during reload are dropped, not queued
       if (!wants || this.reloading) this.cooldown = Math.max(0, this.cooldown); // idle time never banks shots

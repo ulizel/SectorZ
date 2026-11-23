@@ -21,7 +21,7 @@ import type { WeaponDef } from './weapons/weapon';
 import { Renderer } from './render/renderer';
 import { HumanoidRig, SURVIVOR_LOOK } from './render/humanoidRig';
 import { BulletHoles, MuzzleFlash, ParticleSystem } from './render/effects';
-import { buildArena, type DynamicProp } from './world/arena';
+import { buildArena, spawnBarrel, type DynamicProp } from './world/arena';
 import { Hud } from './ui/hud';
 import { DebugOverlay } from './ui/debugOverlay';
 import type { WeaponEvent } from './weapons/weapon';
@@ -38,6 +38,9 @@ const v3b = new THREE.Vector3();
 /** A bullet in flight (simulation). */
 interface Bullet extends BulletVisual { def: WeaponDef; power: number; skip: Set<number> }
 
+/** Player damage at the centre of a barrel blast (falls off to 0 at the edge). */
+const EXPLOSION_PLAYER_DAMAGE = 70;
+
 const BEST_KEY = 'sectorz.best';
 function loadBest(): { wave: number; kills: number } {
   try { return { wave: 0, kills: 0, ...JSON.parse(localStorage.getItem(BEST_KEY) ?? '{}') }; } catch { return { wave: 0, kills: 0 }; }
@@ -53,7 +56,7 @@ export class Game {
   readonly player: Player;
   readonly rig = new HumanoidRig(SURVIVOR_LOOK);
   readonly props: DynamicProp[];
-  private readonly propStart: THREE.Vector3[];
+  private readonly propStart = new Map<DynamicProp, THREE.Vector3>();
   private readonly sparks: ParticleSystem;
   private readonly debris: ParticleSystem;
   private readonly flash: MuzzleFlash;
@@ -81,7 +84,7 @@ export class Game {
   private visYaw = 0;
   private time = 0;
   private readonly weaponEvents: WeaponEvent[] = [];
-  readonly stats = { shots: 0, hits: 0, ticks: 0, maxImpactSpeed: 0, penetrations: 0, activeReloads: 0, zombieHits: 0, kills: 0, dismembers: 0, damageTaken: 0, wave: 0 };
+  readonly stats = { shots: 0, hits: 0, ticks: 0, maxImpactSpeed: 0, penetrations: 0, activeReloads: 0, zombieHits: 0, kills: 0, dismembers: 0, damageTaken: 0, wave: 0, barrels: 0 };
   private readonly bullets: Bullet[] = [];
   private readonly bulletViews: BulletViews;
   private readonly holes: BulletHoles;
@@ -121,7 +124,7 @@ export class Game {
     this.zombieRenderer = new ZombieRenderer(scene);
     this.pickups = new Pickups(scene);
     void ({} as Zombie);
-    this.propStart = this.props.map((p) => { const t = p.body.translation(); return new THREE.Vector3(t.x, t.y, t.z); });
+    for (const p of this.props) { const t = p.body.translation(); this.propStart.set(p, new THREE.Vector3(t.x, t.y, t.z)); }
     this.player = new Player(1, this.physics, 0, 2);
     scene.add(this.rig.root);
 
@@ -272,8 +275,10 @@ export class Game {
       else if (e === 'dry') this.events.emit('dryFire', { weapon: w });
       else if (e === 'activeReload') { this.stats.activeReloads++; this.events.emit('activeReload', { weapon: w, success: true }); }
       else if (e === 'reloadFumble') this.events.emit('activeReload', { weapon: w, success: false });
+      else if (e === 'shellIn') this.sfx.shellIn();
     }
     this.stepBullets(dt);
+    this.updateFuses(dt);
     this.physics.step();
     // Environmental impacts: bodies slammed into the world take damage; thuds for sound.
     this.zombies.processImpacts(this.physics.contactForces, dt, this.impacts);
@@ -304,12 +309,13 @@ export class Game {
       this.stats.shots++;
       this.bullets.push({
         x: p.x, y: BULLET_HEIGHT, z: p.z, px: p.x, py: BULLET_HEIGHT, pz: p.z, ox: p.x, oy: BULLET_HEIGHT, oz: p.z, dx, dy, dz,
-        travelled: 0, heavy: !def.automatic, def, power: def.penetration, skip: new Set<number>(),
+        travelled: 0, width: def.traceWidth, length: def.traceLength, def, power: def.penetration, skip: new Set<number>(),
       });
-      this.events.emit('shot', { x: p.x + dx * 6, y: BULLET_HEIGHT, z: p.z + dz * 6, dx, dz, weapon: def.id });
-      // Recoil shoves the shooter back a little (decays through the movement controller).
-      p.vx -= dx * def.pushback; p.vz -= dz * def.pushback;
     }
+    // Once per trigger pull (not per pellet): muzzle FX/sound, and recoil shoving the shooter back.
+    const ax = Math.sin(this.aim.angle), az = Math.cos(this.aim.angle);
+    this.events.emit('shot', { x: p.x + ax * 6, y: BULLET_HEIGHT, z: p.z + az * 6, dx: ax, dz: az, weapon: def.id });
+    p.vx -= ax * def.pushback; p.vz -= az * def.pushback;
     this.aim.onShot(def, p.weapon.burst);
     this.ai.noise(p.x, p.z, AI_CFG.hearShotRange, this.zombies.zombies); // gunshots draw the horde
   }
@@ -343,8 +349,10 @@ export class Game {
     const cost = MATERIAL_COST[material];
     const penetrated = b.power >= cost;
     const body = hit.collider.parent();
-    // Force scales with the bullet's remaining power (a bullet that punches through transfers less).
-    const power = Math.min(1, b.power / def.penetration + 0.3);
+    // Force scales with the bullet's remaining power (a bullet that punches through transfers less)
+    // and falls off with distance past falloffStart (down to 25% at max range: shotgun pellets).
+    const falloff = b.travelled <= def.falloffStart ? 1 : Math.max(0.25, 1 - 0.75 * (b.travelled - def.falloffStart) / Math.max(1, def.range - def.falloffStart));
+    const power = Math.min(1, b.power / def.penetration + 0.3) * falloff;
     const force = def.impulse * (penetrated ? 0.55 : 1) * power;
     const zr = material === 'flesh'
       ? this.zombies.hit(hit.collider, def.damage * power, b.dx * force, force * 0.25, b.dz * force, ex, ey, ez, SIM_DT, def.limbMult, def.flinch)
@@ -360,6 +368,8 @@ export class Game {
       if (zr.killed) this.events.emit('zombieKilled', { x: ex, y: ey, z: ez });
     } else if (dynamic) {
       this.stats.hits++;
+      const prop = this.props.find((q) => q.body === body);
+      if (prop?.explosive) this.ignite(prop); // shot barrel: hisses, then blows
       body!.applyImpulseAtPoint({ x: b.dx * force, y: force * 0.15, z: b.dz * force }, hit.point, true);
       const v = body!.linvel();
       this.stats.maxImpactSpeed = Math.max(this.stats.maxImpactSpeed, Math.hypot(v.x, v.y, v.z));
@@ -423,7 +433,7 @@ export class Game {
       this.flash.fire(v3, this.visYaw, def.automatic ? (big ? 1.6 : 0.8) : 1);
       this.recoil = Math.min(1, this.recoil + def.recoil);
       this.renderer.addShake(def.shake);
-      if (def.id === 'smg') this.sfx.smgShot(); else this.sfx.gunshot();
+      if (def.id === 'smg') this.sfx.smgShot(); else if (def.id === 'shotgun') { this.sfx.shotgun(); this.sfx.pump(0.3); } else this.sfx.gunshot();
       if (def.casingSound) this.sfx.casing();
       // Muzzle smoke: slow grey puffs drifting up.
       for (let i = 0; i < (def.automatic ? 1 : 3); i++) {
@@ -548,7 +558,12 @@ export class Game {
     const moveAmt = Math.min(1, speed / PLAYER.moveSpeed);
     const strafe = speed > 0.1 ? angleDelta(this.visYaw, Math.atan2(p.vx, p.vz)) : 0;
     this.recoil *= Math.exp(-14 * frameDt);
-    this.rig.pose(p.walkPhase, moveAmt, strafe, this.recoil, this.time, p.weapon.reloadProgress);
+    this.rig.setWeapon(p.weapon.def.id);
+    // Shotgun pump: rack back and forward early in the cooldown after each shot.
+    const w = p.weapon;
+    const pt = w.def.id === 'shotgun' && w.cooldown > 0 ? 1 - w.cooldown / w.def.fireInterval : 1;
+    const pump = pt > 0.2 && pt < 0.65 ? Math.sin(((pt - 0.2) / 0.45) * Math.PI) : 0;
+    this.rig.pose(p.walkPhase, moveAmt, strafe, this.recoil, this.time, w.reloadProgress, pump);
 
     this.marker.position.x = x; this.marker.position.z = z;
     this.updateAimLine(x, z);
@@ -654,7 +669,7 @@ export class Game {
     const n = this.waves.update(dt, this.zombies.aliveCount, max, this.waveEvents);
     for (const e of this.waveEvents) {
       if (e.type === 'waveStart') { this.hud.banner(`WAVE ${e.wave}`, `${e.count} zombies`); this.sfx.waveStart(); }
-      else { this.hud.banner(`WAVE ${e.wave} CLEARED`, 'catch your breath'); this.sfx.waveClear(); this.stats.wave = e.wave; }
+      else { this.hud.banner(`WAVE ${e.wave} CLEARED`, 'catch your breath'); this.sfx.waveClear(); this.stats.wave = e.wave; this.restockBarrels(); }
     }
     for (let i = 0; i < n; i++) this.spawnWaveZombie();
   }
@@ -680,10 +695,10 @@ export class Game {
       p.health = Math.min(PLAYER.maxHealth, p.health + LOOT.healthAmount);
       this.hud.toast(`+${LOOT.healthAmount} HEALTH`);
     } else {
-      const smg = p.weapons[1];
-      const got = smg.addAmmo(LOOT.ammoAmount);
-      if (got <= 0) return false;
-      this.hud.toast(`+${got} SMG AMMO`);
+      // An ammo box tops up the SMG and gives a few shotgun shells.
+      const got = p.weapons[1].addAmmo(LOOT.ammoAmount), shells = p.weapons[2].addAmmo(LOOT.shellAmount);
+      if (got <= 0 && shells <= 0) return false;
+      this.hud.toast([got > 0 ? `+${got} SMG` : '', shells > 0 ? `+${shells} SHELLS` : ''].filter(Boolean).join('  '));
     }
     this.sfx.pickup();
     return true;
@@ -705,10 +720,11 @@ export class Game {
     const hit = this.physics.raycast(p.x, 0.6, p.z, this.aimX, 0, this.aimZ, 6,
       groups(Group.PLAYER, Group.STATIC | Group.PROP), p.collider);
     const d = hit ? Math.max(1.5, hit.toi - 0.3) : 6;
-    this.explode(p.x + this.aimX * d, 0.3, p.z + this.aimZ * d);
+    this.explode(p.x + this.aimX * d, 0.3, p.z + this.aimZ * d, 5, false);
   }
 
-  explode(x: number, y: number, z: number, radius = 5): void {
+  /** `hurtPlayer`: real blasts (barrels) hurt the player; the Lab BOOM button doesn't. */
+  explode(x: number, y: number, z: number, radius = 5, hurtPlayer = true): void {
     const dt = SIM_DT;
     const torn = this.zombies.explode(x, y, z, radius, 160, 45, dt);
     this.stats.dismembers += torn;
@@ -717,22 +733,73 @@ export class Game {
       let dx = t.x - x, dz = t.z - z;
       const d = Math.max(0.5, Math.hypot(dx, dz));
       if (d > radius) continue;
+      // Explosive barrels in range catch the blast and go off moments later (chain reaction).
+      if (prop.explosive) this.ignite(prop, 0.15 + Math.random() * 0.25);
       const f = (1 - d / radius) * 220;
       dx /= d; dz /= d;
       prop.body.applyImpulse({ x: dx * f, y: f * 0.8, z: dz * f }, true);
       prop.body.applyTorqueImpulse({ x: (Math.random() - 0.5) * f * 0.3, y: 0, z: (Math.random() - 0.5) * f * 0.3 }, true);
     }
+    if (hurtPlayer) {
+      const p = this.player, d = Math.hypot(p.x - x, p.z - z);
+      if (d < radius) this.damagePlayer(EXPLOSION_PLAYER_DAMAGE * (1 - d / radius), x, z);
+    }
     this.events.emit('explosion', { x, y, z, radius });
     this.ai.noise(x, z, 30, this.zombies.zombies);
+  }
+
+  /** Light an explosive barrel's fuse (no-op if already burning). */
+  ignite(prop: DynamicProp, fuse = 1): void {
+    if (!prop.explosive || prop.fuse !== undefined) return;
+    prop.fuse = fuse;
+    this.sfx.hiss();
+  }
+
+  /** Burning fuses: flames + smoke from the barrel, then boom. */
+  private updateFuses(dt: number): void {
+    for (let i = this.props.length - 1; i >= 0; i--) {
+      const prop = this.props[i];
+      if (prop.fuse === undefined) continue;
+      prop.fuse -= dt;
+      const t = prop.body.translation();
+      if (Math.random() < 0.7) this.sparks.emit(t.x + (Math.random() - 0.5) * 0.3, t.y + 0.6, t.z + (Math.random() - 0.5) * 0.3,
+        (Math.random() - 0.5) * 0.8, 1.5 + Math.random() * 2, (Math.random() - 0.5) * 0.8, 0.08, 0.3, Math.random() < 0.5 ? 0xff8a2a : 0xffd04a, 0, -2, 1, 2);
+      if (prop.fuse > 0) continue;
+      // Remove the barrel (body + mesh), then the blast.
+      this.props.splice(i, 1);
+      this.renderer.scene.remove(prop.mesh);
+      this.physics.world.removeRigidBody(prop.body);
+      this.stats.barrels++;
+      this.explode(t.x, t.y, t.z, 5);
+    }
+  }
+
+  addBarrel(x: number, z: number, explosive: boolean): DynamicProp {
+    const prop = spawnBarrel(this.renderer.scene, this.physics, x, z, explosive);
+    this.props.push(prop);
+    return prop;
+  }
+
+  /** Between waves: drop a couple of fresh explosive barrels on open ground (max 6 around). */
+  private restockBarrels(): void {
+    const p = this.player;
+    for (let n = 0, tries = 0; n < 2 && tries < 40; tries++) {
+      if (this.props.filter((q) => q.explosive).length >= 6) return;
+      const x = (Math.random() - 0.5) * (ARENA.size - 8), z = (Math.random() - 0.5) * (ARENA.size - 8);
+      if (Math.hypot(x - p.x, z - p.z) < 5 || this.ai.nav.isBlocked(x, z)) continue;
+      this.addBarrel(x, z, true);
+      n++;
+    }
   }
 
   /** Snapshot for automated tests and the debug console. */
   snapshot() {
     const p = this.player;
     let maxPropMove = 0;
-    this.props.forEach((pr, i) => {
+    this.props.forEach((pr) => {
       const t = pr.body.translation();
-      maxPropMove = Math.max(maxPropMove, Math.hypot(t.x - this.propStart[i].x, t.y - this.propStart[i].y, t.z - this.propStart[i].z));
+      const s0 = this.propStart.get(pr);
+      if (s0) maxPropMove = Math.max(maxPropMove, Math.hypot(t.x - s0.x, t.y - s0.y, t.z - s0.z));
     });
     return {
       x: p.x, z: p.z, yaw: p.yaw, health: p.health,
@@ -744,6 +811,7 @@ export class Game {
       zombiesAlive: this.zombies.aliveCount, ragdolls: this.zombies.ragdollCount, severed: this.zombies.severedCount,
       zombieHits: this.stats.zombieHits, kills: this.stats.kills, dismembers: this.stats.dismembers,
       damageTaken: this.stats.damageTaken, playerAlive: this.player.alive, wave: this.waves.wave, waveState: this.waves.state,
+      barrels: this.stats.barrels, explosiveBarrels: this.props.filter((q) => q.explosive).length,
       reserve: p.weapon.reserve, pickups: this.pickups.list.map((q) => q.kind), smgReserve: p.weapons[1].reserve, crawlers: this.zombies.zombies.filter((z) => z.crawler && z.alive).length,
       fps: this.debug.fps, physicsMs: this.debug.avgPhysicsMs,
       bodies: this.physics.bodyCount,
