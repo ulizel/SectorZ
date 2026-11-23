@@ -310,7 +310,7 @@ export class Game {
       this.recoil = Math.min(1, this.recoil + def.recoil);
       this.renderer.addShake(def.shake);
       if (def.id === 'smg') this.sfx.smgShot(); else this.sfx.gunshot();
-      this.sfx.casing();
+      if (def.casingSound) this.sfx.casing();
       // Muzzle smoke: slow grey puffs drifting up.
       for (let i = 0; i < (def.automatic ? 1 : 3); i++) {
         this.debris.emit(v3.x + e.dx * 0.1, v3.y, v3.z + e.dz * 0.1,

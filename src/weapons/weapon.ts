@@ -24,6 +24,8 @@ export interface WeaponDef {
   pushback: number; // m/s the shooter is shoved backwards per shot
   /** Active-reload sweet spot as a fraction of reload progress [start, end]. */
   activeWindow: [number, number];
+  /** Play the falling-shell tink after each shot. */
+  casingSound: boolean;
 }
 
 export const WEAPONS: Record<string, WeaponDef> = {
@@ -31,14 +33,14 @@ export const WEAPONS: Record<string, WeaponDef> = {
     id: 'pistol', name: 'Pistol', damage: 25, fireInterval: 0.2, magSize: 12, reloadTime: 1.1,
     spread: 0.012, range: 40, impulse: 10, pellets: 1, automatic: false, shake: 0.2, recoil: 1,
     aimTurn: 9, settle: 3.5, recoilBloom: 1.2, aimKick: 0,
-    recoilPattern: [0], penetration: 0.7, pushback: 0.9, activeWindow: [0.45, 0.62],
+    recoilPattern: [0], penetration: 0.7, pushback: 0.9, activeWindow: [0.45, 0.62], casingSound: false,
   },
   smg: {
     id: 'smg', name: 'SMG', damage: 14, fireInterval: 0.085, magSize: 30, reloadTime: 1.6,
     spread: 0.03, range: 32, impulse: 6, pellets: 1, automatic: true, shake: 0.1, recoil: 0.55,
     aimTurn: 6, settle: 2.5, recoilBloom: 0.35, aimKick: 0.006,
     recoilPattern: [0.012, 0.016, 0.014, 0.008, -0.004, -0.014, -0.018, -0.012, 0.002, 0.014, 0.018, 0.01],
-    penetration: 0.45, pushback: 0.35, activeWindow: [0.5, 0.64],
+    penetration: 0.45, pushback: 0.35, activeWindow: [0.5, 0.64], casingSound: false,
   },
 };
 
