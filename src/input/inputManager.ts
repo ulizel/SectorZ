@@ -7,9 +7,9 @@ export class InputManager {
   readonly touch: TouchSticks;
   private raw: RawInput = emptyRaw();
 
-  constructor(layer: HTMLElement, reloadButton: HTMLElement, switchButton: HTMLElement) {
+  constructor(layer: HTMLElement, reloadButton: HTMLElement, switchButton: HTMLElement, grenadeButton: HTMLElement) {
     this.km = new KeyboardMouse(layer);
-    this.touch = new TouchSticks(layer, reloadButton, switchButton);
+    this.touch = new TouchSticks(layer, reloadButton, switchButton, grenadeButton);
   }
 
   /** Called once per simulation tick. Edge events (presses, releases) are consumed here. */

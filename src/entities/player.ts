@@ -3,6 +3,7 @@ import { angleDelta, damp } from '../core/math';
 import type { InputCommand } from '../input/commands';
 import { Group, groups, ALL, RAPIER, type PhysicsWorld } from '../physics/physicsWorld';
 import { WEAPONS, WeaponState } from '../weapons/weapon';
+import { GRENADE } from '../weapons/grenade';
 
 /**
  * Player simulation state. No rendering here: the same class would run on a co-op host
@@ -24,6 +25,7 @@ export class Player {
   slowMul = 1;
   readonly weapons = [new WeaponState(WEAPONS.pistol), new WeaponState(WEAPONS.smg), new WeaponState(WEAPONS.shotgun)];
   weaponIndex = 0;
+  grenades = GRENADE.start;
   get weapon(): WeaponState { return this.weapons[this.weaponIndex]; }
 
   /** Switch to a slot (or -1 = next). Returns true if the weapon changed. */

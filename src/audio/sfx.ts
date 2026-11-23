@@ -107,6 +107,9 @@ export class Sfx {
     if (success) { this.tone(1400, 1600, 0.05, 0.18, 'square'); this.tone(2000, 2100, 0.06, 0.15, 'square', 0.06); }
     else { this.burst(0.12, 400, 2, 0.4, 'bandpass'); }
   }
+  throwGrenade(): void { this.burst(0.18, 900, 1.5, 0.3, 'bandpass'); this.tone(1400, 1100, 0.04, 0.08, 'square'); }
+  beep(): void { this.tone(2200, 2200, 0.05, 0.1, 'square'); }
+  clink(): void { this.tone(2600 + Math.random() * 600, 2000, 0.06, 0.12, 'triangle'); this.burst(0.03, 3000, 4, 0.2, 'bandpass'); }
   dry(): void { this.burst(0.03, 4000, 4, 0.3, 'bandpass'); }
   reloadStart(): void { this.burst(0.05, 1800, 6, 0.35, 'bandpass'); this.burst(0.04, 1200, 6, 0.3, 'bandpass', 0.12); }
   reloadEnd(): void { this.burst(0.05, 2500, 6, 0.4, 'bandpass'); this.tone(900, 700, 0.04, 0.12, 'square', 0.05); }

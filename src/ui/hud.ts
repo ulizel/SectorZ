@@ -20,8 +20,17 @@ export class Hud {
   private lastAmmo = -1;
   private lastWeapon = '';
   private lastReload = -1;
+  private lastGrenades = -1;
+  private readonly grenadeCount = document.getElementById('grenade-count')!;
+  private readonly grenadeBtn = document.getElementById('grenade-btn')!;
 
-  update(weapon: WeaponState, health: number, maxHealth: number): void {
+  update(weapon: WeaponState, health: number, maxHealth: number, grenades: number): void {
+    if (grenades !== this.lastGrenades) {
+      this.lastGrenades = grenades;
+      this.grenadeCount.textContent = `GRENADES ${grenades}`;
+      this.grenadeBtn.querySelector('span')!.textContent = String(grenades);
+      this.grenadeBtn.classList.toggle('empty', grenades === 0);
+    }
     if (weapon.reserve !== this.lastReserve || weapon.ammo !== this.lastAmmo || weapon.def.id !== this.lastWeapon) {
       this.lastReserve = weapon.reserve;
       this.reserveEl.textContent = `/ ${weapon.reserve === Infinity ? '∞' : weapon.reserve}`;

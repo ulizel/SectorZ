@@ -26,6 +26,7 @@ import { Hud } from './ui/hud';
 import { DebugOverlay } from './ui/debugOverlay';
 import type { WeaponEvent } from './weapons/weapon';
 import { AimModel } from './weapons/aimModel';
+import { GRENADE, throwVelocity, spawnGrenade, stepGrenade, hitZombie, flightTime, type Grenade } from './weapons/grenade';
 import { settings } from './core/settings';
 
 /** Bullets travel horizontally at this height (zombie chest, crate/barrel tops are 1.2 m). */
@@ -34,6 +35,9 @@ const BULLET_HEIGHT = 1.15;
 const AIM_LINE_LENGTH = 6;
 const v3 = new THREE.Vector3();
 const v3b = new THREE.Vector3();
+const m4 = new THREE.Matrix4();
+/** Dots in the grenade arc preview. */
+const ARC_DOTS = 22;
 
 /** A bullet in flight (simulation). */
 interface Bullet extends BulletVisual { def: WeaponDef; power: number; skip: Set<number> }
@@ -66,6 +70,14 @@ export class Game {
   private readonly ghostLine: THREE.Mesh;
   private readonly cone: THREE.Mesh;
   private readonly marker: THREE.Mesh;
+  /** Grenade throw preview: dotted arc + blast-radius ring at the landing point. */
+  private readonly arcDots: THREE.InstancedMesh;
+  private readonly blastRing: THREE.Mesh;
+  private readonly grenadeMeshes: THREE.Mesh[] = [];
+  private readonly grenadeGeo = new THREE.BoxGeometry(GRENADE.half * 2, GRENADE.half * 2.6, GRENADE.half * 2);
+  private readonly grenadeMat = new THREE.MeshLambertMaterial({ color: 0x4a5a32 });
+  private readonly grenadeLightGeo = new THREE.BoxGeometry(0.06, 0.04, 0.06).translate(0, GRENADE.half * 1.3 + 0.02, 0);
+  private readonly grenadeLightMat = new THREE.MeshBasicMaterial({ color: 0xff2a1a, toneMapped: false });
   /** Whether the aim line is currently shown (exposed to tests). */
   aimLineVisible = false;
   readonly debug = new DebugOverlay();
@@ -84,7 +96,12 @@ export class Game {
   private visYaw = 0;
   private time = 0;
   private readonly weaponEvents: WeaponEvent[] = [];
-  readonly stats = { shots: 0, hits: 0, ticks: 0, maxImpactSpeed: 0, penetrations: 0, activeReloads: 0, zombieHits: 0, kills: 0, dismembers: 0, damageTaken: 0, wave: 0, barrels: 0 };
+  /** Live grenades (simulation). */
+  readonly grenades: Grenade[] = [];
+  private grenadeMode = false;
+  private throwX = 0; private throwZ = 0;
+  private grenadeWanted = false; // armed last tick (for the "no grenades" toast edge)
+  readonly stats = { grenadesThrown: 0, grenadeBlasts: 0, shots: 0, hits: 0, ticks: 0, maxImpactSpeed: 0, penetrations: 0, activeReloads: 0, zombieHits: 0, kills: 0, dismembers: 0, damageTaken: 0, wave: 0, barrels: 0 };
   private readonly bullets: Bullet[] = [];
   private readonly bulletViews: BulletViews;
   private readonly holes: BulletHoles;
@@ -110,12 +127,13 @@ export class Game {
   private deathShown = false;
   lab = false;
 
-  constructor(container: HTMLElement, touchLayer: HTMLElement, reloadBtn: HTMLElement, switchBtn: HTMLElement, readonly quality: QualityPreset) {
+  constructor(container: HTMLElement, touchLayer: HTMLElement, reloadBtn: HTMLElement, switchBtn: HTMLElement, grenadeBtn: HTMLElement,
+    readonly quality: QualityPreset) {
     this.zombies = new ZombieManager(this.physics, quality.name === 'mobile'
       ? { maxRagdolls: 6, maxLooseLimbs: 24, maxCorpses: 16, corpseLife: 60 }
       : { maxRagdolls: 12, maxLooseLimbs: 48, maxCorpses: 32, corpseLife: 90 });
     this.renderer = new Renderer(container, quality);
-    this.input = new InputManager(touchLayer, reloadBtn, switchBtn);
+    this.input = new InputManager(touchLayer, reloadBtn, switchBtn, grenadeBtn);
     const scene = this.renderer.scene;
 
     this.props = buildArena(scene, this.physics);
@@ -168,6 +186,14 @@ export class Game {
       new THREE.MeshBasicMaterial({ color: 0x8fe0ff, transparent: true, opacity: 0.45, depthWrite: false }));
     this.marker.position.y = 0.02;
     scene.add(this.aimLine, this.marker);
+    this.arcDots = new THREE.InstancedMesh(new THREE.SphereGeometry(0.05, 6, 4),
+      new THREE.MeshBasicMaterial({ color: 0xffe08a, transparent: true, opacity: 0.85, depthWrite: false, toneMapped: false }), ARC_DOTS);
+    this.arcDots.frustumCulled = false;
+    this.blastRing = new THREE.Mesh(new THREE.RingGeometry(0.94, 1, 48).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: 0xffb347, transparent: true, opacity: 0.55, depthWrite: false, toneMapped: false }));
+    this.blastRing.add(new THREE.Mesh(new THREE.CircleGeometry(0.06, 16).rotateX(-Math.PI / 2), this.blastRing.material));
+    this.arcDots.visible = this.blastRing.visible = false;
+    scene.add(this.arcDots, this.blastRing);
 
     this.wireEffects();
     this.renderer.snapCamera(this.player.x, this.player.z);
@@ -192,7 +218,8 @@ export class Game {
     const automatic = this.player.weapon.def.automatic;
     this.stickAim = !!raw.aimStick;
     this.stickFiring = raw.stickFiring;
-    if (raw.stickActive) {
+    const grenade = raw.grenadeArmed || raw.grenadeThrow;
+    if (raw.stickActive && !grenade) {
       // Touch: dragging aims; a tap (or the start of a hold) fires once; holding keeps
       // automatic weapons firing. The aim line shows while a thumb is down.
       if (raw.aimStick) {
@@ -215,6 +242,39 @@ export class Game {
     if (raw.stickTap) out.triggerTap = true;
     out.reload = raw.reload;
     out.switchWeapon = raw.switchWeapon;
+    this.resolveGrenade(raw, out, grenade);
+  }
+
+  /** Grenade aiming: target from the touch stick (push further = throw further) or the mouse cursor. */
+  private resolveGrenade(raw: RawInput, out: InputCommand, wanted: boolean): void {
+    out.grenadeMode = out.throwGrenade = false;
+    out.throwX = out.throwZ = 0;
+    const edge = wanted && !this.grenadeWanted;
+    this.grenadeWanted = wanted;
+    if (!wanted) return;
+    if (this.player.grenades <= 0) {
+      this.input.touch.setArmed(false);
+      if (edge) this.hud.toast('NO GRENADES');
+      return;
+    }
+    out.grenadeMode = true;
+    out.aiming = out.trigger = out.triggerTap = false;
+    this.stickAim = this.stickFiring = false;
+    const { minRange, maxRange } = GRENADE;
+    if (raw.grenadeStick) {
+      const sgn = settings.aimReverse ? -1 : 1, st = raw.grenadeStick;
+      const d = minRange + (maxRange - minRange) * st.mag;
+      out.throwX = st.x * sgn * d; out.throwZ = st.y * sgn * d;
+    } else if (raw.aimScreen && this.renderer.screenToGround(raw.aimScreen.x, raw.aimScreen.y, 0, v3)) {
+      const dx = v3.x - this.player.x, dz = v3.z - this.player.z, l = Math.hypot(dx, dz);
+      if (l > 0.01) {
+        const d = Math.min(maxRange, Math.max(minRange, l));
+        out.throwX = (dx / l) * d; out.throwZ = (dz / l) * d;
+      }
+    }
+    const has = out.throwX !== 0 || out.throwZ !== 0;
+    if (has) { const l = Math.hypot(out.throwX, out.throwZ); out.aimX = out.throwX / l; out.aimZ = out.throwZ / l; }
+    out.throwGrenade = raw.grenadeThrow && has;
   }
 
   private step(dt: number): void {
@@ -245,6 +305,8 @@ export class Game {
     if (turning || cmd.aimX !== 0 || cmd.aimZ !== 0) { cmd.aimX = this.aim.x; cmd.aimZ = this.aim.z; }
     this.aimX = this.aim.x; this.aimZ = this.aim.z;
     this.aiming = cmd.aiming;
+    this.grenadeMode = cmd.grenadeMode;
+    this.throwX = cmd.throwX; this.throwZ = cmd.throwZ;
 
     // Zombies around the player slow them down (wading through a crowd) instead of blocking.
     // Future special zombies can pin the player by forcing slowMul to 0.
@@ -277,8 +339,10 @@ export class Game {
       else if (e === 'reloadFumble') this.events.emit('activeReload', { weapon: w, success: false });
       else if (e === 'shellIn') this.sfx.shellIn();
     }
+    if (cmd.throwGrenade) this.throwGrenade(cmd.throwX, cmd.throwZ);
     this.stepBullets(dt);
     this.updateFuses(dt);
+    this.updateGrenades(dt);
     this.physics.step();
     // Environmental impacts: bodies slammed into the world take damage; thuds for sound.
     this.zombies.processImpacts(this.physics.contactForces, dt, this.impacts);
@@ -421,6 +485,32 @@ export class Game {
     }
     // Steady-aim: reticle shifts from red to bright white as the shot settles.
     this.retMat.color.setRGB(1, 0.35 + 0.65 * this.aim.steady, 0.24 + 0.76 * this.aim.steady);
+  }
+
+  /** Grenade throw preview: the same ballistic path the throw will take, cut at the first obstacle. */
+  private updateGrenadeArc(px: number, pz: number): void {
+    const show = this.grenadeMode && (this.throwX !== 0 || this.throwZ !== 0) && this.player.alive;
+    this.arcDots.visible = this.blastRing.visible = show;
+    if (!show) return;
+    const l = Math.hypot(this.throwX, this.throwZ), ux = this.throwX / l, uz = this.throwZ / l;
+    const y0 = GRENADE.releaseHeight, x0 = px + ux * 0.5, z0 = pz + uz * 0.5;
+    const v = throwVelocity(px + this.throwX - x0, pz + this.throwZ - z0, y0);
+    const T = flightTime(l - 0.5), filter = groups(Group.PLAYER, Group.STATIC | Group.PROP);
+    let lx = x0, ly = y0, lz = z0, end = { x: px + this.throwX, z: pz + this.throwZ }, n = 0;
+    const steps = ARC_DOTS * 2;
+    for (let i = 1; i <= steps; i++) {
+      const t = (i / steps) * T;
+      const x = x0 + v.x * t, y = y0 + v.y * t - 4.905 * t * t, z = z0 + v.z * t;
+      const dx = x - lx, dy = y - ly, dz = z - lz, sl = Math.hypot(dx, dy, dz);
+      const hit = this.physics.raycast(lx, ly, lz, dx / sl, dy / sl, dz / sl, sl, filter, this.player.collider);
+      if (hit) { end = { x: hit.point.x, z: hit.point.z }; break; }
+      if (i % 2 === 0 && n < ARC_DOTS) this.arcDots.setMatrixAt(n++, m4.makeTranslation(x, y, z));
+      lx = x; ly = y; lz = z;
+    }
+    this.arcDots.count = n;
+    this.arcDots.instanceMatrix.needsUpdate = true;
+    this.blastRing.position.set(end.x, 0.03, end.z);
+    this.blastRing.scale.setScalar(GRENADE.radius * (1 + 0.02 * Math.sin(this.time * 8)));
   }
 
   private wireEffects(): void {
@@ -567,6 +657,15 @@ export class Game {
 
     this.marker.position.x = x; this.marker.position.z = z;
     this.updateAimLine(x, z);
+    this.updateGrenadeArc(x, z);
+    for (let i = 0; i < this.grenades.length; i++) {
+      const g = this.grenades[i], m = this.grenadeMeshes[i];
+      const t = g.body.translation(), r = g.body.rotation();
+      m.position.set(t.x, t.y, t.z);
+      m.quaternion.set(r.x, r.y, r.z, r.w);
+      // Fuse light blinks faster as it runs down.
+      m.children[0].visible = Math.sin(this.time * (g.fuse < 0.6 ? 50 : 16)) > 0;
+    }
 
     this.syncZombieViews(frameDt);
 
@@ -586,7 +685,7 @@ export class Game {
     this.renderer.updateCamera(x, z, this.aimX, this.aimZ, frameDt);
     this.renderer.render();
 
-    this.hud.update(p.weapon, p.health, PLAYER.maxHealth);
+    this.hud.update(p.weapon, p.health, PLAYER.maxHealth, p.grenades);
     if (this.survival && !this.lab) this.hud.wave(this.waves.state, this.waves.wave, this.waves.remaining(this.zombies.aliveCount), this.waves.timer);
     this.debug.update(frameDt, this.renderer.renderer, {
       physicsMs: this.physics.lastStepMs,
@@ -654,6 +753,8 @@ export class Game {
     p.x = p.prevX = 0; p.z = p.prevZ = 2; p.vx = p.vz = 0;
     for (const w of p.weapons) { w.ammo = w.def.magSize; w.cancelReload(); }
     for (const w of p.weapons) w.reserve = w.def.reserveStart;
+    p.grenades = GRENADE.start;
+    for (let i = this.grenades.length - 1; i >= 0; i--) this.removeGrenade(i);
     this.stats.kills = 0; this.stats.dismembers = 0; this.stats.wave = 0;
     this.deathShown = false;
     this.deadEl.classList.remove('on');
@@ -669,9 +770,17 @@ export class Game {
     const n = this.waves.update(dt, this.zombies.aliveCount, max, this.waveEvents);
     for (const e of this.waveEvents) {
       if (e.type === 'waveStart') { this.hud.banner(`WAVE ${e.wave}`, `${e.count} zombies`); this.sfx.waveStart(); }
-      else { this.hud.banner(`WAVE ${e.wave} CLEARED`, 'catch your breath'); this.sfx.waveClear(); this.stats.wave = e.wave; this.restockBarrels(); }
+      else { this.hud.banner(`WAVE ${e.wave} CLEARED`, 'catch your breath'); this.sfx.waveClear(); this.stats.wave = e.wave; this.restockBarrels(); this.giveGrenade(); }
     }
     for (let i = 0; i < n; i++) this.spawnWaveZombie();
+  }
+
+  /** Clearing a wave earns a grenade (up to the carry limit). */
+  private giveGrenade(): void {
+    const p = this.player;
+    if (p.grenades >= GRENADE.max) return;
+    p.grenades++;
+    this.hud.toast('+1 GRENADE');
   }
 
   private spawnWaveZombie(): void {
@@ -774,6 +883,54 @@ export class Game {
     }
   }
 
+  /** Throw a grenade from the player's hand to land at offset (dx, dz) from the player. */
+  throwGrenade(dx: number, dz: number): void {
+    const p = this.player;
+    if (!p.alive || p.grenades <= 0) return;
+    p.grenades--;
+    this.stats.grenadesThrown++;
+    // Release a little in front of the player, but never inside a wall they're hugging.
+    const l = Math.hypot(dx, dz) || 1, ux = dx / l, uz = dz / l, y0 = GRENADE.releaseHeight;
+    const wall = this.physics.raycast(p.x, y0, p.z, ux, 0, uz, 0.5, groups(Group.PLAYER, Group.STATIC | Group.PROP), p.collider);
+    const off = wall ? Math.max(0, wall.toi - 0.15) : 0.5;
+    const x0 = p.x + ux * off, z0 = p.z + uz * off;
+    const v = throwVelocity(p.x + dx - x0, p.z + dz - z0, y0);
+    this.grenades.push(spawnGrenade(this.physics, x0, y0, z0, v));
+    const mesh = new THREE.Mesh(this.grenadeGeo, this.grenadeMat);
+    mesh.castShadow = true;
+    mesh.add(new THREE.Mesh(this.grenadeLightGeo, this.grenadeLightMat));
+    this.renderer.scene.add(mesh);
+    this.grenadeMeshes.push(mesh);
+    this.sfx.throwGrenade();
+  }
+
+  /** Live grenades: bounce clinks, fuse beeps, then the blast (same explosion as a barrel). */
+  private updateGrenades(dt: number): void {
+    for (let i = this.grenades.length - 1; i >= 0; i--) {
+      const g = this.grenades[i];
+      const before = g.fuse;
+      const r = stepGrenade(g, dt);
+      // Beeps speed up as the fuse runs down.
+      const period = g.fuse < 0.6 ? 0.12 : 0.4;
+      if (r !== 'boom' && Math.floor(before / period) !== Math.floor(g.fuse / period)) this.sfx.beep();
+      if (r === 'bounce') this.sfx.clink();
+      for (const z of this.zombies.zombies) if (z.state === 'alive' && hitZombie(g, z.x, z.z)) { this.sfx.thud(0.3, true); break; }
+      if (r !== 'boom') continue;
+      const t = g.body.translation();
+      this.removeGrenade(i);
+      this.stats.grenadeBlasts++;
+      this.explode(t.x, Math.max(0.2, t.y), t.z, GRENADE.radius);
+    }
+  }
+
+  private removeGrenade(i: number): void {
+    this.physics.world.removeRigidBody(this.grenades[i].body);
+    const mesh = this.grenadeMeshes[i];
+    this.renderer.scene.remove(mesh);
+    this.grenades.splice(i, 1);
+    this.grenadeMeshes.splice(i, 1);
+  }
+
   addBarrel(x: number, z: number, explosive: boolean): DynamicProp {
     const prop = spawnBarrel(this.renderer.scene, this.physics, x, z, explosive);
     this.props.push(prop);
@@ -811,6 +968,8 @@ export class Game {
       zombiesAlive: this.zombies.aliveCount, ragdolls: this.zombies.ragdollCount, severed: this.zombies.severedCount,
       zombieHits: this.stats.zombieHits, kills: this.stats.kills, dismembers: this.stats.dismembers,
       damageTaken: this.stats.damageTaken, playerAlive: this.player.alive, wave: this.waves.wave, waveState: this.waves.state,
+      grenades: p.grenades, grenadesLive: this.grenades.length, grenadesThrown: this.stats.grenadesThrown,
+      grenadeBlasts: this.stats.grenadeBlasts, grenadeMode: this.grenadeMode, arcVisible: this.arcDots.visible,
       barrels: this.stats.barrels, explosiveBarrels: this.props.filter((q) => q.explosive).length,
       reserve: p.weapon.reserve, pickups: this.pickups.list.map((q) => q.kind), smgReserve: p.weapons[1].reserve, crawlers: this.zombies.zombies.filter((z) => z.crawler && z.alive).length,
       fps: this.debug.fps, physicsMs: this.debug.avgPhysicsMs,

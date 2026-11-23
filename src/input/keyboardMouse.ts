@@ -7,6 +7,8 @@ export class KeyboardMouse {
   private pressedQueued = false;
   private reloadQueued = false;
   private switchQueued: number | null = null;
+  private grenadeHeld = false;
+  private grenadeReleased = false;
   active = false; // becomes true on first mouse/keyboard use
 
   constructor(target: HTMLElement) {
@@ -19,10 +21,14 @@ export class KeyboardMouse {
       if (e.code === 'Digit3') this.switchQueued = 2;
       if (e.code === 'KeyQ') this.switchQueued = -1;
       if (e.code === 'Space') this.pressedQueued = true;
+      if (e.code === 'KeyG') this.grenadeHeld = true;
       this.active = true;
     });
-    addEventListener('keyup', (e) => this.keys.delete(e.code));
-    addEventListener('blur', () => { this.keys.clear(); this.down = false; });
+    addEventListener('keyup', (e) => {
+      this.keys.delete(e.code);
+      if (e.code === 'KeyG' && this.grenadeHeld) { this.grenadeHeld = false; this.grenadeReleased = true; }
+    });
+    addEventListener('blur', () => { this.keys.clear(); this.down = false; this.grenadeHeld = false; });
     target.addEventListener('pointermove', (e) => {
       if (e.pointerType !== 'mouse') return;
       this.mouse = { x: e.clientX, y: e.clientY };
@@ -54,5 +60,8 @@ export class KeyboardMouse {
     this.pressedQueued = false;
     if (this.reloadQueued) { out.reload = true; this.reloadQueued = false; }
     if (this.switchQueued !== null) { out.switchWeapon = this.switchQueued; this.switchQueued = null; }
+    // Hold G to aim a grenade at the cursor, release to throw.
+    out.grenadeArmed = this.grenadeHeld;
+    if (this.grenadeReleased) { out.grenadeThrow = true; this.grenadeReleased = false; }
   }
 }

@@ -82,7 +82,7 @@ scripts/smoke.mjs  Playwright: real browser, desktop + phone touch, screenshots
 Playable on GitHub Pages (`main` auto-deploys via `.github/workflows/ci-deploy.yml` when CI passes).
 
 **Done:** P0 pipeline · P1 player · P2 Ragdoll Lab · P3 zombie AI · P4 chunk 1 (waves, reserve ammo, loot, run stats)
-· P4 chunk 2 (shotgun, explosive barrels).
+· P4 chunk 2 (shotgun, explosive barrels) · P4 chunk 3 (grenades).
 
 Key systems and where they live:
 | System | Files |
@@ -96,9 +96,10 @@ Key systems and where they live:
 | Instanced zombie rendering (11 draw calls for any crowd) | `src/render/zombieRenderer.ts` |
 | Waves, loot | `src/systems/waves.ts`, `src/systems/pickups.ts` |
 | Arena, props, explosive barrels | `src/world/arena.ts` |
+| Grenades (💣 arms → right stick aims arc, push further = further, lift throws; desktop hold G; CCD box, bounce, 2 s fuse → `game.explode`; drop at a living zombie's feet; 3 at start, +1 per cleared wave, max 5) | `src/weapons/grenade.ts`, `src/game.ts` (`resolveGrenade`, `throwGrenade`, `updateGrenades`, `updateGrenadeArc`), `src/input/touchSticks.ts` |
 | HUD, pause menu, Lab panel | `src/ui/hud.ts`, `src/main.ts`, `index.html`, `src/style.css` |
 
-Tests: `npm test` (Vitest, headless Rapier; ~63 tests) and `npm run build && npm run smoke`
+Tests: `npm test` (Vitest, headless Rapier; ~68 tests) and `npm run build && npm run smoke`
 (Playwright: desktop, iPhone 13, Pixel 7 touch, Lab, survival, arsenal). `SMOKE_ONLY=<scenario>` runs one;
 `SMOKE_CPU_THROTTLE=4` simulates slow CI. Tests that depend on randomness use seeded `rng` (`src/core/math.ts`).
 
@@ -113,7 +114,6 @@ Tests: `npm test` (Vitest, headless Rapier; ~63 tests) and `npm run build && npm
 
 ## Next up
 
-- **P4 chunk 3:** grenades (touch arc-aim with right stick, bounce, fuse, uses existing `game.explode`).
 - **P4 chunk 4:** weapon unlocks by wave (SMG wave 2, shotgun wave 4), grenade pickups, compact portrait HUD.
 - **P5:** upgrades between waves; runner / brute / exploder zombie types (use per-zombie `speedMul`, `slowPerHit`,
   `minSpeedMul`, `player.slowMul` for pinning); more props.
@@ -126,7 +126,7 @@ Tests: `npm test` (Vitest, headless Rapier; ~63 tests) and `npm run build && npm
 | P1 Player | Voxel survivor, movement/aim (keys+mouse, twin-stick touch), pistol, effects, arena | ✅ |
 | P2 Ragdoll Lab | Ragdoll builder, anim→ragdoll handoff, bullet/explosion reactions, breakable joints, limb pool + caps | ✅ |
 | P3 Zombie AI | Walker, flow-field pathing, separation, attacks, hit reactions, crawlers | ✅ |
-| P4 Combat loop | Shotgun/SMG/grenade, explosive barrels, loot, waves, HUD, audio | chunks 1–2 ✅, 3–4 next |
+| P4 Combat loop | Shotgun/SMG/grenade, explosive barrels, loot, waves, HUD, audio | chunks 1–3 ✅, 4 next |
 | P5 Progression | Upgrades, runner/brute/exploder types, more props | |
 | P6 Polish & perf | Lighting/VFX, quality presets | |
 | P7 Co-op prep | Net transport interface, host-authoritative sim prototype | |

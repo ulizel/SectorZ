@@ -263,6 +263,31 @@ async function phone(browser, deviceName, landscape) {
   const s6 = await state(page);
   check('reload button works', s6.reloading || s6.ammo === 30, `ammo=${s6.ammo}`);
 
+  // 7b. Grenade: 💣 arms (no shooting), drag aims the arc, lifting the thumb throws; 💣 again cancels.
+  await ticks(page, 60);
+  await page.tap('#grenade-btn');
+  await page.tap('#grenade-btn');
+  await ticks(page, 3);
+  check('💣 tapped twice cancels the grenade', !(await state(page)).grenadeMode && !(await page.evaluate(() => document.getElementById('grenade-btn').classList.contains('armed'))));
+  await page.tap('#grenade-btn');
+  await ticks(page, 3);
+  const g0 = await state(page);
+  check('💣 arms a grenade', g0.grenadeMode && g0.grenades === 3);
+  await touch('touchStart', [R]);
+  await dragRight(70, 0);
+  await ticks(page, 20);
+  const g1 = await state(page);
+  check('armed: dragging the right stick shows the throw arc (no aim line, no shots)', g1.arcVisible && !g1.aimLineVisible && g1.shots === g0.shots,
+    `arc=${g1.arcVisible} line=${g1.aimLineVisible} shots=${g1.shots - g0.shots}`);
+  await page.screenshot({ path: `${OUT}/${deviceName.replace(/\W+/g, '-')}${landscape ? '-landscape' : ''}-grenade-aim.png` });
+  await touch('touchEnd', []);
+  await ticks(page, 4);
+  const g2 = await state(page);
+  check('lifting the thumb throws (one grenade used, disarmed)', g2.grenadesThrown === 1 && g2.grenades === 2 && !g2.grenadeMode && g2.shots === g0.shots,
+    `thrown=${g2.grenadesThrown} left=${g2.grenades} shots=${g2.shots - g0.shots}`);
+  await ticks(page, 140);
+  check('grenade explodes after its fuse', (await state(page)).grenadeBlasts === 1);
+
   // 8. Browser lock: pinch and pull-down gestures must not zoom, scroll, or select.
   await touch('touchStart', [{ x: vw * 0.45, y: vh * 0.5, id: 7 }, { x: vw * 0.55, y: vh * 0.5, id: 8 }]);
   for (let i = 1; i <= 6; i++) {
@@ -378,7 +403,7 @@ async function survival(browser) {
 }
 
 async function arsenal(browser) {
-  console.log('\n[Shotgun + explosive barrels, desktop]');
+  console.log('\n[Shotgun + explosive barrels + grenades, desktop]');
   const page = await browser.newPage({ viewport: { width: 1000, height: 640 } });
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
@@ -415,6 +440,29 @@ async function arsenal(browser) {
   check('shot barrel explodes and chains to the next one', d.barrels - c.barrels >= 2, `exploded=${d.barrels - c.barrels}`);
   check('zombie next to the barrels is killed', d.kills > c.kills, `kills ${c.kills}→${d.kills}`);
   check('player standing close takes splash damage', d.damageTaken > c.damageTaken, `damage=${(d.damageTaken - c.damageTaken).toFixed(0)}`);
+  // Grenade (desktop): hold G to aim at the cursor (arc, no gunfire), release to throw; it blows up the zombie there.
+  await page.evaluate(() => { const g = window.__SECTORZ__.game, p = g.player; g.zombies.clear(); p.health = 100; g.zombies.spawn(p.x + 7, p.z, -Math.PI / 2); });
+  const e = await state(page);
+  await page.keyboard.down('KeyG');
+  // The camera leans toward the aim, so re-aim at the target until it settles.
+  for (let i = 0; i < 3; i++) { const tgt = await worldToScreen(page, e.x + 7, 0, e.z); await page.mouse.move(tgt.x, tgt.y); await ticks(page, 20); }
+  await page.mouse.down(); await ticks(page, 2); await page.mouse.up();
+  await ticks(page, 5);
+  const f = await state(page);
+  check('holding G shows the throw arc instead of the aim line, and the gun stays silent', f.arcVisible && f.grenadeMode && !f.aimLineVisible && f.shots === e.shots,
+    `arc=${f.arcVisible} line=${f.aimLineVisible} shots=${f.shots - e.shots}`);
+  await page.screenshot({ path: `${OUT}/grenade-aim.png` });
+  await page.keyboard.up('KeyG');
+  await ticks(page, 5);
+  const g = await state(page);
+  check('releasing G throws a grenade', g.grenadesThrown - e.grenadesThrown === 1 && g.grenades === e.grenades - 1 && g.grenadesLive === 1);
+  await ticks(page, 140);
+  const h = await state(page);
+  const zs2 = await page.evaluate(() => window.__SECTORZ__.game.zombies.zombies.map((z) => z.state));
+  check('grenade explodes and takes out the zombie at the target', h.grenadeBlasts - e.grenadeBlasts === 1 && h.grenadesLive === 0 && zs2.every((st) => st !== 'alive'),
+    `blasts=${h.grenadeBlasts - e.grenadeBlasts} states=${zs2.join(',')}`);
+  check('player 7 m away is outside the blast', h.damageTaken === e.damageTaken, `damage=${(h.damageTaken - e.damageTaken).toFixed(0)}`);
+  await page.screenshot({ path: `${OUT}/grenade-boom.png` });
   check('no JS errors (arsenal)', errors.length === 0, errors.join(' | '));
   await page.close();
 }

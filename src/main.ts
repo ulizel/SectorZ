@@ -59,6 +59,7 @@ async function boot(): Promise<void> {
     document.getElementById('touch')!,
     document.getElementById('reload-btn')!,
     document.getElementById('switch-btn')!,
+    document.getElementById('grenade-btn')!,
     quality,
   );
   api.game = game;
@@ -79,8 +80,8 @@ async function boot(): Promise<void> {
   game.renderer.render();
 
   status.textContent = quality.name === 'mobile'
-    ? 'Left thumb: move · Right thumb: drag to aim, release to shoot (SMG: hold) · ⇄ weapon'
-    : 'WASD move · Mouse aim · Click fire · R reload · 1/2/Q switch weapon';
+    ? 'Left thumb: move · Right thumb: drag to aim, release to shoot (SMG: hold) · ⇄ weapon · 💣 then drag to throw'
+    : 'WASD move · Mouse aim · Click fire · R reload · 1/2/Q switch weapon · hold G to aim a grenade, release to throw';
   startBtn.disabled = false;
   labBtn.disabled = false;
   startBtn.textContent = quality.name === 'mobile' ? 'TAP TO PLAY' : 'CLICK TO PLAY';
