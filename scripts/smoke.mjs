@@ -241,7 +241,11 @@ async function phone(browser, deviceName, landscape) {
   check('⇄ button switches to SMG', (await state(page)).weapon === 'smg');
   const f0 = await state(page);
   await touch('touchStart', [R]);
-  await dragRight(0, -70); // drag up → aim up
+  await dragRight(0, -30); // inner ring: aim only
+  await ticks(page, 30);
+  const fa = await state(page);
+  check('SMG: light push aims without firing', fa.aimLineVisible && fa.shots === f0.shots, `shots=${fa.shots - f0.shots}`);
+  for (let i = 1; i <= 4; i++) { await touch('touchMove', [{ ...R, y: R.y - 30 - i * 10 }]); await sleep(16); }
   await ticks(page, 60);
   const f1 = await state(page);
   check('SMG: fires continuously while aimed', f1.shots - f0.shots >= 9, `shots=${f1.shots - f0.shots}`);

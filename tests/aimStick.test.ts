@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { AimStickLogic, AIM_DEADZONE } from '../src/input/aimStick';
+import { AimStickLogic, AIM_DEADZONE, FIRE_ZONE } from '../src/input/aimStick';
 
 describe('AimStickLogic', () => {
   it('a quick tap without dragging is ignored', () => {
@@ -64,5 +64,20 @@ describe('AimStickLogic', () => {
     expect(a.aiming).toBe(true);
     a.move(AIM_DEADZONE * 0.9, 0); // slightly inside, still within hysteresis band
     expect(a.aiming).toBe(true);
+  });
+
+  it('automatic fire zone: inner ring only aims, outer ring fires, back in stops', () => {
+    const a = new AimStickLogic();
+    a.start();
+    a.move(0.5, 0);
+    expect(a.aiming).toBe(true);
+    expect(a.firing).toBe(false);
+    a.move(FIRE_ZONE + 0.05, 0);
+    expect(a.firing).toBe(true);
+    a.move(0.5, 0);
+    expect(a.firing).toBe(false);
+    expect(a.aiming).toBe(true);
+    a.end();
+    expect(a.firing).toBe(false);
   });
 });

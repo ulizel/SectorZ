@@ -9,10 +9,15 @@
  */
 export const AIM_DEADZONE = 0.3; // fraction of full stick deflection
 const DEADZONE_EXIT = 0.24; // small hysteresis so the line doesn't flicker at the edge
+/** Automatic weapons: push past this deflection to fire (inside it you only aim). */
+export const FIRE_ZONE = 0.75;
+const FIRE_ZONE_EXIT = 0.68;
 
 export class AimStickLogic {
   active = false;
   aiming = false;
+  /** Pushed into the outer fire zone (automatic weapons fire while true). */
+  firing = false;
   dirX = 0;
   dirY = 0;
   /** Deflection beyond the deadzone, 0..1 (light push = fine aim). */
@@ -34,8 +39,10 @@ export class AimStickLogic {
       this.dirX = nx / m;
       this.dirY = ny / m;
       this.mag = Math.min(1, (m - AIM_DEADZONE) / (1 - AIM_DEADZONE));
+      this.firing = m >= (this.firing ? FIRE_ZONE_EXIT : FIRE_ZONE);
     } else {
       this.aiming = false;
+      this.firing = false;
     }
   }
 
@@ -43,6 +50,7 @@ export class AimStickLogic {
     if (this.active && this.aiming) this.release = { x: this.dirX, y: this.dirY };
     this.active = false;
     this.aiming = false;
+    this.firing = false;
   }
 
   /** Returns the release-shot direction once, then clears it. */

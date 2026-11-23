@@ -44,8 +44,7 @@ export class Game {
   private readonly aimLine: THREE.Mesh;
   private readonly reticle: THREE.Group;
   private readonly ghostLine: THREE.Mesh;
-  private readonly coneL: THREE.Mesh;
-  private readonly coneR: THREE.Mesh;
+  private readonly cone: THREE.Mesh;
   private readonly marker: THREE.Mesh;
   /** Whether the aim line is currently shown (exposed to tests). */
   aimLineVisible = false;
@@ -91,9 +90,9 @@ export class Game {
     this.aimLine.visible = false;
     this.reticle = new THREE.Group();
     const retMat = new THREE.MeshBasicMaterial({ color: 0xff5a3c, transparent: true, opacity: 0.9, depthWrite: false, toneMapped: false, side: THREE.DoubleSide });
-    this.reticle.add(new THREE.Mesh(new THREE.RingGeometry(0.2, 0.26, 20).rotateX(-Math.PI / 2), retMat));
+    this.reticle.add(new THREE.Mesh(new THREE.RingGeometry(0.07, 0.09, 16).rotateX(-Math.PI / 2), retMat));
     for (let i = 0; i < 4; i++) {
-      const tick = new THREE.Mesh(new THREE.PlaneGeometry(0.05, 0.14).rotateX(-Math.PI / 2).translate(0, 0, 0.33), retMat);
+      const tick = new THREE.Mesh(new THREE.PlaneGeometry(0.02, 0.05).rotateX(-Math.PI / 2).translate(0, 0, 0.12), retMat);
       tick.rotation.y = (i * Math.PI) / 2;
       this.reticle.add(tick);
     }
@@ -103,14 +102,13 @@ export class Game {
     const lineGeo = new THREE.BoxGeometry(1, 1, 1).translate(0, 0, 0.5);
     this.ghostLine = new THREE.Mesh(lineGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.18, depthWrite: false, toneMapped: false }));
     this.ghostLine.scale.set(0.02, 0.01, 1);
-    // Accuracy cone edges: open up when moving/turning/firing, close as aim settles.
-    const coneMat = new THREE.MeshBasicMaterial({ color: 0xff5a3c, transparent: true, opacity: 0.28, depthWrite: false, toneMapped: false });
-    this.coneL = new THREE.Mesh(lineGeo, coneMat);
-    this.coneR = new THREE.Mesh(lineGeo, coneMat);
-    this.coneL.scale.set(0.015, 0.01, 1);
-    this.coneR.scale.set(0.015, 0.01, 1);
-    this.ghostLine.visible = this.coneL.visible = this.coneR.visible = false;
-    scene.add(this.ghostLine, this.coneL, this.coneR);
+    // Accuracy cone: a very faint filled wedge that widens when moving/turning/firing.
+    const coneGeo = new THREE.BufferGeometry();
+    coneGeo.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 1, 0, 1, -1, 0, 1], 3));
+    this.cone = new THREE.Mesh(coneGeo, new THREE.MeshBasicMaterial({
+      color: 0xff7a5c, transparent: true, opacity: 0.08, depthWrite: false, toneMapped: false, side: THREE.DoubleSide }));
+    this.ghostLine.visible = this.cone.visible = false;
+    scene.add(this.ghostLine, this.cone);
     this.marker = new THREE.Mesh(new THREE.RingGeometry(0.42, 0.52, 24).rotateX(-Math.PI / 2),
       new THREE.MeshBasicMaterial({ color: 0x8fe0ff, transparent: true, opacity: 0.45, depthWrite: false }));
     this.marker.position.y = 0.02;
@@ -145,7 +143,7 @@ export class Game {
       this.stickTarget = Math.atan2(raw.aimStick.x * sgn, raw.aimStick.y * sgn);
       this.stickMag = raw.stickReleased ? 1 : raw.aimStickMag;
       out.aiming = raw.stickAiming;
-      out.trigger = automatic && raw.stickAiming;
+      out.trigger = automatic && raw.stickFiring; // SMG: inner ring aims, outer ring fires
       // Single-shot: lifting queues a shot that fires once the aim arrives (or after a short wait).
       if (!automatic && raw.stickReleased) this.pendingShot = { angle: this.stickTarget, t: AIM.pendingShotMax };
     } else if (raw.aimScreen && this.renderer.screenToGround(raw.aimScreen.x, raw.aimScreen.y, BULLET_HEIGHT, v3)) {
@@ -237,7 +235,7 @@ export class Game {
   private updateAimLine(px: number, pz: number): void {
     const show = this.aiming;
     this.aimLineVisible = show;
-    this.aimLine.visible = this.reticle.visible = this.coneL.visible = this.coneR.visible = show;
+    this.aimLine.visible = this.reticle.visible = this.cone.visible = show;
     this.ghostLine.visible = show && this.stickAim && this.aim.errorTo(this.stickTarget) > 0.03;
     if (!show) return;
     const dx = this.aimX, dz = this.aimZ;
@@ -251,11 +249,9 @@ export class Game {
     this.aimLine.scale.z = len;
     const yaw = Math.atan2(dx, dz);
     const spread = this.aim.spread(this.player.weapon.def);
-    for (const [m, sgn] of [[this.coneL, -1], [this.coneR, 1]] as const) {
-      m.position.set(ox, BULLET_HEIGHT, oz);
-      m.rotation.set(0, yaw + sgn * spread, 0);
-      m.scale.z = len;
-    }
+    this.cone.position.set(ox, BULLET_HEIGHT - 0.005, oz);
+    this.cone.rotation.set(0, yaw, 0);
+    this.cone.scale.set(Math.max(0.01, Math.tan(spread) * len), 1, len);
     if (this.ghostLine.visible) {
       this.ghostLine.position.set(ox, BULLET_HEIGHT - 0.01, oz);
       this.ghostLine.rotation.set(0, this.stickTarget, 0);
@@ -264,7 +260,7 @@ export class Game {
     this.reticle.position.set(ox + dx * len, BULLET_HEIGHT + 0.02, oz + dz * len);
     this.reticle.rotation.y += 0.04;
     // Reticle size shows current accuracy at that distance.
-    const s = Math.max(0.6, Math.min(3, (spread * len) / 0.12)) * (1 + 0.06 * Math.sin(this.time * 10));
+    const s = Math.max(0.8, Math.min(1.6, (spread * len) / 0.1)) * (1 + 0.05 * Math.sin(this.time * 10));
     this.reticle.scale.set(s, s, s);
   }
 
