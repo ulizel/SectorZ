@@ -19,8 +19,10 @@ export interface TracerStyle {
   emberChance: number;
   /** Muzzle flash size multiplier, forward spike length (m), side spikes, sparks per shot. */
   flashScale: number; spikeLength: number; sideSpikes: number; flashSparks: number;
-  /** Impact flash size multiplier. */
-  impactScale: number;
+  /** Directional blast: flame spikes fanned across ±fanAngle (rad) in front of the muzzle (0 = none). */
+  fanSpikes: number; fanAngle: number;
+  /** Impact flash size multiplier and spike count. */
+  impactScale: number; impactSpikes: number;
   /** Random per-bullet length/brightness variation 0..1. */
   variation: number;
 }
@@ -32,8 +34,27 @@ export const TRACER_STYLES: Partial<Record<string, TracerStyle>> = {
     coreWidth: 0.08, glowWidth: 0.34, length: 1.8, headSize: 0.13,
     trailWidth: 0.05, trailLife: 0.25, trailBright: 0.6,
     emberChance: 0.35,
-    flashScale: 1.8, spikeLength: 0.75, sideSpikes: 4, flashSparks: 7,
-    impactScale: 1.7, variation: 0,
+    flashScale: 1.8, spikeLength: 0.75, sideSpikes: 4, flashSparks: 7, fanSpikes: 0, fanAngle: 0,
+    impactScale: 1.7, impactSpikes: 5, variation: 0,
+  },
+  // SMG: rapid, shorter and thinner tracers that vary round to round; a smaller flash every shot
+  // (every 3rd round blooms bigger, driven by the caller's power).
+  smg: {
+    coreColor: 0xffe7a0, glowColor: 0xff9a2a, trailColor: 0xffa040,
+    coreWidth: 0.06, glowWidth: 0.24, length: 1.15, headSize: 0.095,
+    trailWidth: 0.035, trailLife: 0.14, trailBright: 0.45,
+    emberChance: 0.12,
+    flashScale: 1.35, spikeLength: 0.6, sideSpikes: 3, flashSparks: 3, fanSpikes: 0, fanAngle: 0,
+    impactScale: 1.25, impactSpikes: 4, variation: 0.35,
+  },
+  // Shotgun: twelve individual glowing pellets and a wide, directional muzzle blast.
+  shotgun: {
+    coreColor: 0xfff0c0, glowColor: 0xff7a18, trailColor: 0xff8a30,
+    coreWidth: 0.055, glowWidth: 0.22, length: 0.95, headSize: 0.1,
+    trailWidth: 0.03, trailLife: 0.28, trailBright: 0.4,
+    emberChance: 0.15,
+    flashScale: 2.3, spikeLength: 0.95, sideSpikes: 4, flashSparks: 16, fanSpikes: 7, fanAngle: 0.32,
+    impactScale: 1.1, impactSpikes: 3, variation: 0.4,
   },
 };
 
@@ -95,7 +116,7 @@ export class Tracers {
   private readonly byBullet = new Map<TracerBullet, Trail>();
   private readonly seen = new Set<TracerBullet>();
 
-  constructor(scene: THREE.Scene, private readonly embers: ParticleSystem, capacity = 96) {
+  constructor(scene: THREE.Scene, private readonly embers: ParticleSystem, capacity = 128) {
     this.core = instanced(taperedGeo(0.15, 0.25), additive(true), capacity, scene);
     this.glow = instanced(taperedGeo(0.3, 0), additive(true), capacity, scene);
     this.head = instanced(UNIT_BOX, additive(false), capacity, scene);
@@ -191,7 +212,7 @@ export class VoxelBursts {
   private readonly life: Float32Array; private readonly max: Float32Array; private readonly rgb: Float32Array;
   private next = 0;
 
-  constructor(scene: THREE.Scene, capacity = 128) {
+  constructor(scene: THREE.Scene, capacity = 192) {
     this.cap = capacity;
     // Origin at the back face: spikes grow forward from where they're placed.
     this.mesh = instanced(UNIT_BOX.clone().translate(0, 0, 0.5), additive(false), capacity, scene);
@@ -263,9 +284,17 @@ export class WeaponVfx {
       q.setFromEuler(e.set(Math.sin(a) * 0.9, yaw + Math.cos(a) * 0.9, 0, 'YXZ'));
       b.spawn(x, y, z, q, 0.045 * f, 0.045 * f, st.spikeLength * 0.45 * f * (0.7 + Math.random() * 0.6), 0xffc060, 0.04, 1);
     }
+    // Directional blast: a fan of flame tongues across the spread, longest in the middle.
+    for (let i = 0; i < st.fanSpikes; i++) {
+      const u = st.fanSpikes > 1 ? (i / (st.fanSpikes - 1)) * 2 - 1 : 0;
+      q.setFromEuler(e.set((Math.random() - 0.5) * 0.25, yaw + u * st.fanAngle, Math.random() * Math.PI, 'YXZ'));
+      const len = st.spikeLength * f * 0.6 * (1 - 0.45 * Math.abs(u)) * (0.8 + Math.random() * 0.4);
+      b.spawn(x, y, z, q, 0.07 * f, 0.07 * f, len, i % 2 ? 0xffb040 : 0xff7a1a, 0.07, 1);
+    }
     // Cubic sparks spraying forward.
+    const sprayW = 0.9 + st.fanAngle * 2;
     for (let i = 0; i < st.flashSparks; i++) {
-      const a = yaw + (Math.random() - 0.5) * 0.9, sp = 5 + Math.random() * 7;
+      const a = yaw + (Math.random() - 0.5) * sprayW, sp = 5 + Math.random() * 7;
       this.sparks.emit(x, y, z, Math.sin(a) * sp, (Math.random() - 0.3) * 2.5, Math.cos(a) * sp,
         0.03 + Math.random() * 0.025, 0.1 + Math.random() * 0.12, Math.random() < 0.5 ? 0xffd070 : 0xff8a2a, 0.3, 8, 4);
     }
@@ -277,7 +306,7 @@ export class WeaponVfx {
     q.setFromEuler(e.set(Math.random() * 3, Math.random() * 3, Math.random() * 3));
     const c = 0.16 * f;
     b.spawn(x, y, z, q, c, c, c, flesh ? 0xff6040 : 0xfff0c0, 0.06, 1.2);
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < st.impactSpikes; i++) {
       // Random direction in the hemisphere around the normal.
       d.set(nx + (Math.random() - 0.5) * 1.6, ny + (Math.random() - 0.5) * 1.6, nz + (Math.random() - 0.5) * 1.6).normalize();
       q.setFromUnitVectors(FWD, d);

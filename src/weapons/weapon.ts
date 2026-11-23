@@ -38,7 +38,7 @@ export interface WeaponDef {
    * A boosted pellet beats limbs' break impulses (they tear off at once) and slams the body back.
    */
   closeBoost?: { range: number; fade: number; mul: number };
-  /** Bold pellets: hot glow, lingering smoke trails, sparks in flight and a muzzle blast cone. */
+  /** Heavy muzzle smoke cloud on each shot (shotgun). */
   boldTrace?: boolean;
   /** Multiplier on damage dealt to a limb's own health (how fast it tears limbs off). */
   limbMult: number;

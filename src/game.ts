@@ -39,8 +39,6 @@ const v3b = new THREE.Vector3();
 const m4 = new THREE.Matrix4();
 /** Dots in the grenade arc preview. */
 const ARC_DOTS = 22;
-/** Shotgun muzzle blast flash duration (s). */
-const BLAST_LIFE = 0.09;
 
 /** A bullet in flight (simulation). */
 interface Bullet extends BulletVisual { def: WeaponDef; power: number; skip: Set<number> }
@@ -75,9 +73,6 @@ export class Game {
   private readonly ghostLine: THREE.Mesh;
   private readonly cone: THREE.Mesh;
   private readonly marker: THREE.Mesh;
-  /** Shotgun muzzle blast: a brief additive flash shaped like the pellet spread. */
-  private readonly blastCone: THREE.Mesh;
-  private blastT = 0;
   /** Red ground warnings under burning barrels: blast-radius ring + a fill that grows until the boom. */
   private readonly dangerZones: THREE.Mesh[] = [];
   private readonly dangerRingGeo = new THREE.RingGeometry(0.95, 1, 48).rotateX(-Math.PI / 2);
@@ -209,20 +204,7 @@ export class Game {
       new THREE.MeshBasicMaterial({ color: 0xffb347, transparent: true, opacity: 0.55, depthWrite: false, toneMapped: false }));
     this.blastRing.add(new THREE.Mesh(new THREE.CircleGeometry(0.06, 16).rotateX(-Math.PI / 2), this.blastRing.material));
     this.arcDots.visible = this.blastRing.visible = false;
-    // Blast wedge: bright at the muzzle, fading to nothing at the far rounded edge (vertex colours).
-    const fan: number[] = [], fanCol: number[] = [];
-    for (let i = 0; i < 6; i++) {
-      const a0 = -1 + (i / 6) * 2, a1 = -1 + ((i + 1) / 6) * 2;
-      fan.push(0, 0, 0, a0, 0, Math.cos(a0 * 0.5), a1, 0, Math.cos(a1 * 0.5));
-      fanCol.push(1, 0.7, 0.3, 0, 0, 0, 0, 0, 0);
-    }
-    const fanGeo = new THREE.BufferGeometry();
-    fanGeo.setAttribute('position', new THREE.Float32BufferAttribute(fan, 3));
-    fanGeo.setAttribute('color', new THREE.Float32BufferAttribute(fanCol, 3));
-    this.blastCone = new THREE.Mesh(fanGeo, new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true,
-      blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide }));
-    this.blastCone.visible = false;
-    scene.add(this.arcDots, this.blastRing, this.blastCone);
+    scene.add(this.arcDots, this.blastRing);
 
     this.wireEffects();
     this.renderer.snapCamera(this.player.x, this.player.z);
@@ -402,7 +384,7 @@ export class Game {
       this.stats.shots++;
       this.bullets.push({
         x: p.x, y: BULLET_HEIGHT, z: p.z, px: p.x, py: BULLET_HEIGHT, pz: p.z, ox: p.x, oy: BULLET_HEIGHT, oz: p.z, dx, dy, dz,
-        travelled: 0, width: def.traceWidth, length: def.traceLength, bold: def.boldTrace, style: TRACER_STYLES[def.id], seed: Math.random(), def, power: def.penetration, skip: new Set<number>(),
+        travelled: 0, width: def.traceWidth, length: def.traceLength, style: TRACER_STYLES[def.id], seed: Math.random(), def, power: def.penetration, skip: new Set<number>(),
       });
     }
     // Once per trigger pull (not per pellet): muzzle FX/sound, and recoil shoving the shooter back.
@@ -574,21 +556,13 @@ export class Game {
       const big = def.automatic && this.stats.shots % 3 === 0;
       const style = TRACER_STYLES[def.id];
       this.flash.fire(v3, this.visYaw, def.automatic ? (big ? 1.6 : 0.8) : 1, !style);
-      if (style) { this.vfx.muzzleFlash(style, v3.x, v3.y, v3.z, e.dx, e.dz); this.rig.muzzle.getWorldPosition(v3); }
+      if (style) this.vfx.muzzleFlash(style, v3.x, v3.y, v3.z, e.dx, e.dz, def.automatic ? (big ? 1.25 : 0.85) : 1);
       this.recoil = Math.min(1, this.recoil + def.recoil);
       this.renderer.addShake(def.shake);
       if (def.id === 'smg') this.sfx.smgShot(); else if (def.id === 'shotgun') { this.sfx.shotgun(); this.sfx.pump(0.3); } else this.sfx.gunshot();
       if (def.casingSound) this.sfx.casing();
       if (def.boldTrace) {
-        // Muzzle blast wedge as wide as the spread, plus a thick smoke cloud.
-        this.rig.muzzle.getWorldPosition(v3); // (flash.fire moved v3)
-        const len = 2.2, half = Math.tan(def.spread * 2.6) * len;
-        this.blastCone.position.set(v3.x, v3.y, v3.z);
-        this.blastCone.rotation.set(0, Math.atan2(e.dx, e.dz), 0);
-        this.blastCone.scale.set(half, 1, len);
-        this.blastCone.visible = true;
-        (this.blastCone.material as THREE.MeshBasicMaterial).opacity = 1;
-        this.blastT = BLAST_LIFE;
+        // A thick smoke cloud pushed out of the barrel.
         for (let i = 0; i < 6; i++) {
           const sp = (Math.random() - 0.5) * 2;
           this.debris.emit(v3.x + e.dx * 0.3, v3.y, v3.z + e.dz * 0.3,
@@ -752,18 +726,8 @@ export class Game {
     for (let i = warn; i < this.dangerZones.length; i++) this.dangerZones[i].visible = false;
 
     this.flash.update(frameDt);
-    this.bulletViews.update(this.bullets, alpha, frameDt);
+    this.bulletViews.update(this.bullets, alpha);
     this.vfx.update(this.bullets, alpha, frameDt);
-    // Bold (shotgun) pellets shed hot sparks as they fly; the muzzle blast cone flashes and fades.
-    for (const b of this.bullets) {
-      if (b.bold && Math.random() < 0.35) this.sparks.emit(b.x, b.y, b.z, b.dx * 3 + (Math.random() - 0.5), Math.random() * 1.5, b.dz * 3 + (Math.random() - 0.5),
-        0.03, 0.15 + Math.random() * 0.15, Math.random() < 0.5 ? 0xffb347 : 0xffe08a, 0.3, 14, 2);
-    }
-    if (this.blastT > 0) {
-      this.blastT -= frameDt;
-      (this.blastCone.material as THREE.MeshBasicMaterial).opacity = Math.max(0, this.blastT / BLAST_LIFE);
-      this.blastCone.visible = this.blastT > 0;
-    }
     this.holes.update(frameDt);
     this.blood.update(frameDt);
     if (this.hitMarkerT > 0) { this.hitMarkerT -= frameDt; if (this.hitMarkerT <= 0) this.hitMarker.classList.remove('on'); }
