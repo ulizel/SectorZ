@@ -50,8 +50,8 @@ describe('hit reactions (natural, not twitchy)', () => {
   it('sustained SMG fire: no per-bullet snapping beyond normal walking motion, zombie is driven back', () => {
     const calm = burst(0, false);
     const fire = burst(WEAPONS.smg.flinch, true);
-    // Hits may add a strong but smooth rock (< ~4°/tick); the old twitchy snaps were ~0.2 rad (11°) in one tick.
-    expect(fire.maxStep).toBeLessThan(calm.maxStep + 0.07);
+    // Per-bullet micro-kicks are wanted (sharp jolts, < ~7°/tick), but no teleport-snaps (old bug: ~0.2 rad in one tick).
+    expect(fire.maxStep).toBeLessThan(calm.maxStep + 0.12);
     expect(fire.pushedBack - calm.pushedBack).toBeGreaterThan(0.15); // driven back by the fire
     expect(fire.underFire).toBeGreaterThan(0.4); // recognised as sustained fire (leans in, slows)
   });

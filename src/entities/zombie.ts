@@ -53,6 +53,8 @@ const LIMB_COLLIDER_SCALE = 0.85;
 const CCD_PARTS = new Set<PartName>(['head', 'forearmL', 'forearmR', 'upperArmL', 'upperArmR']);
 
 export const ZOMBIE_MAX_HP = 100;
+/** Per-hit instant jolt (rad/s per unit of hit strength) for the struck limb and the upper body. */
+const KICK_LIMB = 4, KICK_BODY = 2.2;
 const PART_IDX = Object.fromEntries(HUMANOID.map((d, i) => [d.name, i])) as Record<PartName, number>;
 /**
  * Animated (kinematic) zombie parts don't physically touch props: a kinematic body has infinite
@@ -277,7 +279,8 @@ export class Zombie {
    * so a burst blends into one push rather than a twitch per bullet.
    */
   private react(dt: number): void {
-    const SPRING = 420, DAMP = 2 * Math.sqrt(SPRING), RECOVER = Math.exp(-4 * dt);
+    // Slightly under-damped (ratio ~0.55): each kick snaps, overshoots a little and settles.
+    const SPRING = 420, DAMP = 2 * Math.sqrt(SPRING) * 0.55, RECOVER = Math.exp(-4 * dt);
     const sat = (x: number, max: number) => Math.sign(x) * max * (1 - Math.exp(-Math.abs(x) / max));
     for (const p of this.parts) {
       p.flinchTarget *= RECOVER;
@@ -520,6 +523,10 @@ export class Zombie {
         const left = (ix * fz - iz * fx) / (impulse || 1); // + = pushed toward its left (+X local)
         this.sway.tx += k * 0.6 * fwd;
         this.sway.tz -= k * 0.6 * left;
+        // Micro-kick: an instant velocity jolt per bullet on top of the smooth lean (felt impact).
+        p.flinchVel += k * KICK_LIMB;
+        this.sway.vx += k * KICK_BODY * fwd;
+        this.sway.vz -= k * KICK_BODY * left;
         this.pushV.x += ix * 0.06 * flinch; this.pushV.z += iz * 0.06 * flinch;
         this.heat += 1;
       }
