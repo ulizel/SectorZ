@@ -856,9 +856,12 @@ export class Game {
     for (let tries = 0; tries < 30; tries++) {
       const x = (Math.random() - 0.5) * (ARENA.size - 4), z = (Math.random() - 0.5) * (ARENA.size - 4);
       if (Math.hypot(x - p.x, z - p.z) < 12 || this.ai.nav.isBlocked(x, z)) continue;
-      const zb = this.zombies.spawn(x, z, Math.atan2(p.x - x, p.z - z));
+      const r = Math.random();
+      const kind = r < tune.bruteChance ? 'brute' : r < tune.bruteChance + tune.runnerChance ? 'runner' : 'walker';
+      const zb = this.zombies.spawn(x, z, Math.atan2(p.x - x, p.z - z), kind);
       zb.baseSpeed *= tune.speedMul;
       zb.hp *= tune.hpMul;
+      zb.maxHp = zb.hp;
       this.ai.alertAll([zb]);
       return;
     }

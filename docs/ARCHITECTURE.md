@@ -116,8 +116,8 @@ Tests: `npm test` (Vitest, headless Rapier; ~68 tests) and `npm run build && npm
 
 ## Next up
 
-- **P5:** upgrades between waves; runner / brute / exploder zombie types (use per-zombie `speedMul`, `slowPerHit`,
-  `minSpeedMul`, `player.slowMul` for pinning); more props.
+- **P5** (chunks): 1 ✅ runner + brute types (`ZOMBIE_TYPES` in `src/entities/zombie.ts`, wave mix in `waveTuning`);
+  2 exploder zombie; 3 upgrades between waves (pick 1 of 3); 4 more props.
 
 ## Roadmap
 

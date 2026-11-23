@@ -68,6 +68,23 @@ const PART_IDX = Object.fromEntries(HUMANOID.map((d, i) => [d.name, i])) as Reco
 const ALIVE_GROUPS = groups(Group.ZOMBIE, ALL & ~Group.PROP);
 export type ZombieState = 'alive' | 'knocked' | 'gettingUp' | 'dead';
 
+export type ZombieKind = 'walker' | 'runner' | 'brute';
+/**
+ * Zombie types. `scale` scales the whole body (pose AND colliders: boxes stay the truth).
+ * speed = base walk speed range (m/s); slowPerHit/minSpeedMul = wound slowdown; damageMul = attack;
+ * knockdownMul = impulse needed to knock it over; limbMul = limb HP and tear-off impulse; tint = skin/cloth colour multiplier.
+ */
+export const ZOMBIE_TYPES: Record<ZombieKind, {
+  scale: number; hp: number; speed: [number, number]; slowPerHit: number; minSpeedMul: number;
+  damageMul: number; knockdownMul: number; limbMul: number; tint: [number, number, number];
+}> = {
+  walker: { scale: 1, hp: 100, speed: [1.15, 1.6], slowPerHit: 0.07, minSpeedMul: 0.55, damageMul: 1, knockdownMul: 1, limbMul: 1, tint: [1, 1, 1] },
+  // Fast and fragile: sprints at you, goes down easily. Pale, slightly smaller.
+  runner: { scale: 0.92, hp: 55, speed: [3.1, 3.6], slowPerHit: 0.1, minSpeedMul: 0.45, damageMul: 0.75, knockdownMul: 0.8, limbMul: 0.8, tint: [1.6, 1.55, 1.3] },
+  // Big, slow and tanky: shrugs off wounds and small arms knockback, hits hard. Dark, reddish.
+  brute: { scale: 1.32, hp: 360, speed: [0.9, 1.05], slowPerHit: 0, minSpeedMul: 1, damageMul: 2.2, knockdownMul: 3.5, limbMul: 2.2, tint: [0.78, 0.6, 0.55] },
+};
+
 export interface ZombiePart {
   def: PartDef;
   index: number;
@@ -114,6 +131,12 @@ export class Zombie {
   readonly wounds: Wound[] = [];
   state: ZombieState = 'alive';
   hp = ZOMBIE_MAX_HP;
+  maxHp = ZOMBIE_MAX_HP;
+  readonly type: (typeof ZOMBIE_TYPES)[ZombieKind];
+  /** Body scale (brutes are bigger, runners smaller). */
+  readonly scale: number;
+  /** Attack damage multiplier. */
+  damageMul = 1;
   /** Seconds since death (drives cleanup). */
   deadTime = 0;
   /** Seconds the ragdoll has been at rest. */
@@ -160,8 +183,14 @@ export class Zombie {
   /** AI blackboard (owned by the AI system). */
   brain: unknown = null;
 
-  constructor(private readonly physics: PhysicsWorld, public x: number, public z: number, public yaw: number) {
+  constructor(private readonly physics: PhysicsWorld, public x: number, public z: number, public yaw: number, readonly kind: ZombieKind = 'walker') {
     this.w = physics.world;
+    const ty = this.type = ZOMBIE_TYPES[kind];
+    this.scale = ty.scale;
+    this.hp = this.maxHp = ty.hp;
+    this.baseSpeed = ty.speed[0] + Math.random() * (ty.speed[1] - ty.speed[0]);
+    this.slowPerHit = ty.slowPerHit; this.minSpeedMul = ty.minSpeedMul; this.damageMul = ty.damageMul;
+    this.pose.root.scale.setScalar(this.scale); // the animated pose (and so every part position) scales
     this.animate(0);
     HUMANOID.forEach((def, i) => {
       this.partWorld(i, v, q);
@@ -169,14 +198,14 @@ export class Zombie {
         .setTranslation(v.x, v.y, v.z).setRotation(q).setLinearDamping(0.05).setAngularDamping(0.8)
         .setCcdEnabled(CCD_PARTS.has(def.name)));
       const limb = def.name !== 'torso' && def.name !== 'pelvis' && def.name !== 'head';
-      const s = limb ? LIMB_COLLIDER_SCALE : 1;
+      const s = (limb ? LIMB_COLLIDER_SCALE : 1) * this.scale, k = this.scale;
       const collider = this.w.createCollider(
-        RAPIER.ColliderDesc.cuboid(def.size[0] / 2 * s, def.size[1] / 2, def.size[2] / 2 * s)
-          .setMass(def.mass).setFriction(0.8).setRestitution(0.15)
+        RAPIER.ColliderDesc.cuboid(def.size[0] / 2 * s, def.size[1] / 2 * k, def.size[2] / 2 * s)
+          .setMass(def.mass * k * k * k).setFriction(0.8).setRestitution(0.15)
           .setCollisionGroups(ALIVE_GROUPS)
           .setActiveEvents(RAPIER.ActiveEvents.CONTACT_FORCE_EVENTS).setContactForceEventThreshold(250), body);
       physics.materials.set(collider.handle, 'flesh');
-      const hp = PART_DAMAGE[def.name].hp;
+      const hp = PART_DAMAGE[def.name].hp * ty.limbMul;
       this.parts.push({
         def, index: i, body, collider, joint: null, parent: def.parent ? HUMANOID.findIndex((p) => p.name === def.parent) : -1,
         hp, maxHp: hp, severed: false, dynamic: false, dangling: false, prev: v.clone(), flinch: 0, flinchVel: 0, flinchTarget: 0,
@@ -193,8 +222,9 @@ export class Zombie {
     const parent = this.parts[p.parent];
     const d = p.def, pd = parent.def;
     // Pivot in each body's local frame (bodies sit at their box centres).
-    const a1 = { x: d.joint[0] - pd.center[0], y: d.joint[1] - pd.center[1], z: d.joint[2] - pd.center[2] };
-    const a2 = { x: -d.center[0], y: -d.center[1], z: -d.center[2] };
+    const k = this.scale;
+    const a1 = { x: (d.joint[0] - pd.center[0]) * k, y: (d.joint[1] - pd.center[1]) * k, z: (d.joint[2] - pd.center[2]) * k };
+    const a2 = { x: -d.center[0] * k, y: -d.center[1] * k, z: -d.center[2] * k };
     const hinge = HINGE[d.name];
     let data: RAPIER.JointData;
     if (hinge) {
@@ -539,13 +569,13 @@ export class Zombie {
         this.pushV.x += ix * 0.06 * flinch; this.pushV.z += iz * 0.06 * flinch;
         this.heat += 1;
         this.burstImpulse += impulse;
-        if (this.burstImpulse > KNOCKDOWN_IMPULSE) this.knockDown(dt);
+        if (this.burstImpulse > KNOCKDOWN_IMPULSE * this.type.knockdownMul) this.knockDown(dt);
       }
       if (this.hp <= 0) this.kill(dt);
     }
     p.hp -= damage * limbMult;
     let severed = -1;
-    if (p.hp <= 0 || impulse > dmg.breakImpulse) {
+    if (p.hp <= 0 || impulse > dmg.breakImpulse * this.type.limbMul) {
       if (this.sever(i, dt)) severed = i;
     } else if (this.alive && !p.dynamic && p.def.name.startsWith('upperArm') && p.hp <= p.maxHp * 0.5) {
       // Shattered shoulder: the arm goes limp and dangles, the zombie keeps coming.

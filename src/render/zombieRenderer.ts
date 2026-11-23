@@ -5,7 +5,6 @@ import type { Zombie } from '../entities/zombie';
 
 const SKIN = 0x7d9a6a, SHIRT = 0x5b4a3c, PANTS = 0x3b4250, GORE = 0x7a0f12, GORE_DARK = 0x4a0608, BONE = 0xe8e0c8;
 const BRUISE = new THREE.Color(0x8a3a30); // multiplied with the vertex colours
-const WHITE = new THREE.Color(1, 1, 1);
 const POOL_GEO = new THREE.CircleGeometry(0.5, 10).rotateX(-Math.PI / 2);
 
 type Box = [w: number, h: number, d: number, color: number, x: number, y: number, z: number];
@@ -149,12 +148,13 @@ export class ZombieRenderer {
           const t = z.parts[k].body.translation(), q = z.parts[k].body.rotation();
           pv.set(t.x, t.y, t.z); qv.set(q.x, q.y, q.z, q.w);
         }
-        m4.compose(pv, qv, sv.set(1, 1, 1));
+        m4.compose(pv, qv, sv.setScalar(z.scale));
         this.parts[k].setMatrixAt(i, m4);
         // Bruising: parts darken as they lose health (a hint they're about to come off).
         const p = z.parts[k];
-        const frac = p.maxHp === Infinity ? 1 - Math.max(0, z.hp) / 100 : 1 - Math.max(0, p.hp) / p.maxHp;
-        tint.copy(WHITE).lerp(BRUISE, Math.min(0.8, frac * 0.8));
+        const frac = p.maxHp === Infinity ? 1 - Math.max(0, z.hp) / z.maxHp : 1 - Math.max(0, p.hp) / p.maxHp;
+        const ty = z.type.tint; // per-type colouring (runner pale, brute dark)
+        tint.setRGB(ty[0], ty[1], ty[2]).lerp(BRUISE, Math.min(0.8, frac * 0.8));
         this.parts[k].setColorAt(i, tint);
         for (const c of r.gore) {
           if (c.part !== k || g >= goreCap) continue;

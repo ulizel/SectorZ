@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { Zombie } from './zombie';
+import { Zombie, type ZombieKind } from './zombie';
 import type { PhysicsWorld, RAPIER } from '../physics/physicsWorld';
 import { HUMANOID } from '../rigs/humanoid';
 
@@ -37,8 +37,8 @@ export class ZombieManager {
 
   constructor(private readonly physics: PhysicsWorld, readonly caps: RagdollCaps) {}
 
-  spawn(x: number, z: number, yaw: number): Zombie {
-    const zb = new Zombie(this.physics, x, z, yaw);
+  spawn(x: number, z: number, yaw: number, kind: ZombieKind = 'walker'): Zombie {
+    const zb = new Zombie(this.physics, x, z, yaw, kind);
     zb.parts.forEach((p, i) => this.byCollider.set(p.collider.handle, { z: zb, part: i }));
     this.zombies.push(zb);
     this.spawned.push(zb);
