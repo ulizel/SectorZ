@@ -76,6 +76,9 @@ async function desktop(browser) {
   check('game running (sim ticks advancing)', s0.ticks > 10, `ticks=${s0.ticks}`);
   console.log(`    (fps in headless software GL: ${s0.fps.toFixed(1)})`);
 
+  // Aim at the barrel at (6,-1). It's an explosive one in the arena: defuse it here, or it blows up
+  // after the first hit and the later shots have nothing to hit (this test is about pushing props).
+  await page.evaluate(() => { for (const q of window.__SECTORZ__.game.props) { const t = q.body.translation(); if (Math.hypot(t.x - 6, t.z + 1) < 0.5) q.explosive = false; } });
   // Aim at the barrel at (6,-1). The camera leans toward the aim, so re-project until it settles.
   const aimAt = async () => { const t = await worldToScreen(page, 6, 1.15, -1); await page.mouse.move(t.x, t.y); };
   for (let i = 0; i < 5; i++) { await aimAt(); await sleep(400); }
