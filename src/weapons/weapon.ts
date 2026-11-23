@@ -33,6 +33,11 @@ export interface WeaponDef {
   bulletSpeed: number;
   /** Max vertical scatter (rad), biased low so some shots catch legs. */
   vSpread: number;
+  /**
+   * Point-blank boost on zombie hits: impulse × `mul` up to `range` m, fading to ×1 at `fade` m.
+   * A boosted pellet beats limbs' break impulses (they tear off at once) and slams the body back.
+   */
+  closeBoost?: { range: number; fade: number; mul: number };
   /** Multiplier on damage dealt to a limb's own health (how fast it tears limbs off). */
   limbMult: number;
   /** Hit-reaction strength on zombies (pistol: clear jolt per shot; SMG: small tremors that build). */
@@ -72,6 +77,7 @@ export const WEAPONS: Record<string, WeaponDef> = {
     reserveStart: 18, reserveMax: 36,
     bulletSpeed: 65, vSpread: 0.05, limbMult: 1.4, flinch: 1.2,
     traceWidth: 0.05, traceLength: 0.55, falloffStart: 6, shellReload: true,
+    closeBoost: { range: 3, fade: 6, mul: 4 },
   },
 };
 

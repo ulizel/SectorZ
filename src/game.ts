@@ -418,8 +418,13 @@ export class Game {
     const falloff = b.travelled <= def.falloffStart ? 1 : Math.max(0.25, 1 - 0.75 * (b.travelled - def.falloffStart) / Math.max(1, def.range - def.falloffStart));
     const power = Math.min(1, b.power / def.penetration + 0.3) * falloff;
     const force = def.impulse * (penetrated ? 0.55 : 1) * power;
+    // Point-blank shotgun: pellets hit zombies much harder (limbs tear off, bodies are blown back).
+    const cb = def.closeBoost;
+    const close = cb && material === 'flesh'
+      ? 1 + (cb.mul - 1) * Math.min(1, Math.max(0, (cb.fade - b.travelled) / (cb.fade - cb.range))) : 1;
+    const zf = force * close;
     const zr = material === 'flesh'
-      ? this.zombies.hit(hit.collider, def.damage * power, b.dx * force, force * 0.25, b.dz * force, ex, ey, ez, SIM_DT, def.limbMult, def.flinch)
+      ? this.zombies.hit(hit.collider, def.damage * power, b.dx * zf, zf * 0.25, b.dz * zf, ex, ey, ez, SIM_DT, def.limbMult, def.flinch)
       : null;
     const dynamic = !!zr || (!!body && body.isDynamic());
     if (zr) {
