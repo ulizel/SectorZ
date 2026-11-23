@@ -162,10 +162,11 @@ async function phone(browser, deviceName, landscape) {
   const LU = { ...L, y: L.y - 70 }; // left stick pushed up
   /** Drag the right thumb (optionally while the left thumb is held) in 5 steps to dx,dy. */
   async function dragRight(dx, dy, left = null) {
+    // A real swipe starts moving within a few ms: send the moves back-to-back so slow CI event
+    // delivery doesn't turn the touch into a touch-and-hold (which fires after 0.2 s still).
     for (let i = 1; i <= 5; i++) {
       const pts = [{ ...R, x: R.x + (dx * i) / 5, y: R.y + (dy * i) / 5 }];
       await touch('touchMove', left ? [left, ...pts] : pts);
-      await sleep(16);
     }
   }
 
@@ -191,16 +192,21 @@ async function phone(browser, deviceName, landscape) {
   check('quick tap on right half fires one shot along the current aim', s2.shots - s1.shots === 1, `shots=${s2.shots - s1.shots}`);
 
   // 3. Dragging only aims: aim line, no shot while dragging or on release.
+  // The swipe's touch-down and first moves are dispatched in one go (as a real swipe arrives):
+  // slow CI event delivery would otherwise look like a 0.2 s touch-and-hold, which fires.
   await ticks(page, 15);
-  await touch('touchStart', [R]);
-  await dragRight(70, 0); // drag right → aim right
+  const swipe = (type, pts) => page.evaluate(([type, pts]) => {
+    const el = document.getElementById('touch');
+    for (const [t, x, y] of pts) el.dispatchEvent(new PointerEvent(t ?? type, { pointerId: 77, pointerType: 'touch', clientX: x, clientY: y, bubbles: true, cancelable: true }));
+  }, [type, pts]);
+  await swipe(null, [['pointerdown', R.x, R.y], ...[1, 2, 3, 4, 5].map((i) => ['pointermove', R.x + i * 14, R.y])]);
   await ticks(page, 50);
   const s3 = await state(page);
   check('dragging right stick shows aim line', s3.aimLineVisible === true);
   check('dragging never fires', s3.shots === s2.shots, `shots=${s3.shots - s2.shots}`);
   check('aim settles on the dragged direction (+X)', Math.abs(s3.aimX - 1) < 0.01 && Math.abs(s3.aimZ) < 0.01, `aim=(${s3.aimX.toFixed(2)},${s3.aimZ.toFixed(2)})`);
   await page.screenshot({ path: `${OUT}/${deviceName.replace(/\W+/g, '-')}${landscape ? '-landscape' : ''}-aiming.png` });
-  await touch('touchEnd', []);
+  await swipe(null, [['pointerup', R.x + 70, R.y]]);
   await ticks(page, 6);
   const s4 = await state(page);
   check('releasing a drag does not fire', s4.shots === s3.shots, `shots=${s4.shots - s3.shots}`);
