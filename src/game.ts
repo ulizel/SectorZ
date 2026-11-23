@@ -46,6 +46,8 @@ interface Bullet extends BulletVisual { def: WeaponDef; power: number; skip: Set
 
 /** Player damage at the centre of a barrel blast (falls off to 0 at the edge). */
 const EXPLOSION_PLAYER_DAMAGE = 70;
+/** Explosive barrel blast radius (m). */
+const BARREL_BLAST_RADIUS = 5;
 
 const BEST_KEY = 'sectorz.best';
 function loadBest(): { wave: number; kills: number } {
@@ -75,6 +77,12 @@ export class Game {
   /** Shotgun muzzle blast: a brief additive flash shaped like the pellet spread. */
   private readonly blastCone: THREE.Mesh;
   private blastT = 0;
+  /** Red ground warnings under burning barrels: blast-radius ring + a fill that grows until the boom. */
+  private readonly dangerZones: THREE.Mesh[] = [];
+  private readonly dangerRingGeo = new THREE.RingGeometry(0.95, 1, 48).rotateX(-Math.PI / 2);
+  private readonly dangerFillGeo = new THREE.CircleGeometry(1, 48).rotateX(-Math.PI / 2);
+  private readonly dangerRingMat = new THREE.MeshBasicMaterial({ color: 0xff3020, transparent: true, opacity: 0.8, depthWrite: false, toneMapped: false });
+  private readonly dangerFillMat = new THREE.MeshBasicMaterial({ color: 0xff3020, transparent: true, opacity: 0.18, depthWrite: false, toneMapped: false });
   /** Grenade throw preview: dotted arc + blast-radius ring at the landing point. */
   private readonly arcDots: THREE.InstancedMesh;
   private readonly blastRing: THREE.Mesh;
@@ -510,6 +518,24 @@ export class Game {
     this.retMat.color.setRGB(1, 0.35 + 0.65 * this.aim.steady, 0.24 + 0.76 * this.aim.steady);
   }
 
+  /** Barrel about to blow: ring at the blast radius, inner fill grows with the fuse (0..1). */
+  private showDangerZone(i: number, x: number, z: number, progress: number): void {
+    let ring = this.dangerZones[i];
+    if (!ring) {
+      ring = new THREE.Mesh(this.dangerRingGeo, this.dangerRingMat);
+      ring.add(new THREE.Mesh(this.dangerFillGeo, this.dangerFillMat));
+      ring.renderOrder = 1;
+      this.renderer.scene.add(ring);
+      this.dangerZones.push(ring);
+    }
+    ring.visible = true;
+    ring.position.set(x, 0.025, z);
+    ring.scale.setScalar(BARREL_BLAST_RADIUS);
+    ring.children[0].scale.setScalar(Math.max(0.05, Math.min(1, progress)));
+    // Pulse faster as the fuse runs out.
+    this.dangerRingMat.opacity = 0.55 + 0.4 * Math.abs(Math.sin(this.time * (6 + 14 * progress)));
+  }
+
   /** Grenade throw preview: the same ballistic path the throw will take, cut at the first obstacle. */
   private updateGrenadeArc(px: number, pz: number): void {
     const show = this.grenadeMode && (this.throwX !== 0 || this.throwZ !== 0) && this.player.alive;
@@ -709,11 +735,14 @@ export class Game {
 
     this.syncZombieViews(frameDt);
 
+    let warn = 0;
     for (const prop of this.props) {
       const t = prop.body.translation(), r = prop.body.rotation();
       prop.mesh.position.set(t.x, t.y, t.z);
       prop.mesh.quaternion.set(r.x, r.y, r.z, r.w);
+      if (prop.fuse !== undefined) this.showDangerZone(warn++, t.x, t.z, 1 - prop.fuse / (prop.fuseTotal || 1));
     }
+    for (let i = warn; i < this.dangerZones.length; i++) this.dangerZones[i].visible = false;
 
     this.flash.update(frameDt);
     this.bulletViews.update(this.bullets, alpha, frameDt);
@@ -910,7 +939,7 @@ export class Game {
   /** Light an explosive barrel's fuse (no-op if already burning). */
   ignite(prop: DynamicProp, fuse = 1): void {
     if (!prop.explosive || prop.fuse !== undefined) return;
-    prop.fuse = fuse;
+    prop.fuse = prop.fuseTotal = fuse;
     this.sfx.hiss();
   }
 
@@ -929,7 +958,7 @@ export class Game {
       this.renderer.scene.remove(prop.mesh);
       this.physics.world.removeRigidBody(prop.body);
       this.stats.barrels++;
-      this.explode(t.x, t.y, t.z, 5);
+      this.explode(t.x, t.y, t.z, BARREL_BLAST_RADIUS);
     }
   }
 

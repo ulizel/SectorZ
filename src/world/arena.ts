@@ -15,6 +15,8 @@ export interface DynamicProp {
   explosive?: boolean;
   /** Seconds until it goes off (set once ignited). */
   fuse?: number;
+  /** Fuse length when lit (s), for the danger-zone warning. */
+  fuseTotal?: number;
 }
 
 /** A barrel prop (plain or explosive). Exported so the game can drop fresh ones between waves. */
