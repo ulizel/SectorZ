@@ -15,7 +15,7 @@ export const AI = {
   attackRange: 1.05, // start an attack when this close (m, centre to centre)
   crawlAttackRange: 0.95,
   strikeReach: 1.35, // hit lands if the player is still within this at the strike
-  windup: 0.5, // s (dodge window)
+  windup: 0.6, // s (dodge window; generous because at night you see them late)
   recover: 0.7,
   damage: 12,
   separation: 0.85, // personal space between zombies (m)

@@ -27,7 +27,7 @@ describe('zombie types', () => {
     expect(he(b) / he(w)).toBeCloseTo(ZOMBIE_TYPES.brute.scale, 3);
     expect(hy(r)).toBeLessThan(hy(w));
     expect(b.hp).toBe(ZOMBIE_TYPES.brute.hp);
-    expect(r.baseSpeed).toBeGreaterThan(w.baseSpeed * 1.8);
+    expect(r.baseSpeed).toBeGreaterThan(w.baseSpeed * 1.7);
     p.free();
   });
 

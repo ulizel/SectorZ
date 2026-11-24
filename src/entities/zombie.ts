@@ -81,7 +81,7 @@ export const ZOMBIE_TYPES: Record<ZombieKind, {
 }> = {
   walker: { scale: 1, hp: 100, speed: [1.15, 1.6], slowPerHit: 0.07, minSpeedMul: 0.55, damageMul: 1, knockdownMul: 1, limbMul: 1, tint: [1, 1, 1] },
   // Fast and fragile: sprints at you, goes down easily. Pale, slightly smaller.
-  runner: { scale: 0.92, hp: 55, speed: [3.1, 3.6], slowPerHit: 0.1, minSpeedMul: 0.45, damageMul: 0.75, knockdownMul: 0.8, limbMul: 0.8, tint: [1.6, 1.55, 1.3] },
+  runner: { scale: 0.92, hp: 55, speed: [2.8, 3.3], slowPerHit: 0.1, minSpeedMul: 0.45, damageMul: 0.75, knockdownMul: 0.8, limbMul: 0.8, tint: [1.6, 1.55, 1.3] },
   // Big, slow and tanky: shrugs off wounds and small arms knockback, hits hard. Dark, reddish.
   brute: { scale: 1.32, hp: 360, speed: [0.9, 1.05], slowPerHit: 0, minSpeedMul: 1, damageMul: 2.2, knockdownMul: 3.5, limbMul: 2.2, tint: [0.78, 0.6, 0.55] },
   // Bloated and glowing: walks up and blows itself up (or pops when killed). See EXPLODER.

@@ -392,7 +392,7 @@ async function survival(browser) {
     await ticks(page, 60);
   }
   const a = await state(page);
-  check('killing the whole wave clears it (break before wave 2)', a.waveState === 'break' && a.wave === 1 && a.kills >= 6, `state=${a.waveState} kills=${a.kills}`);
+  check('killing the whole wave clears it (break before wave 2)', a.waveState === 'break' && a.wave === 1 && a.kills >= 5, `state=${a.waveState} kills=${a.kills}`);
   // Upgrade cards: shown after the wave; the break waits; clicking one applies it.
   const u0 = await state(page);
   const timer0 = await page.evaluate(() => window.__SECTORZ__.game.waves.timer);

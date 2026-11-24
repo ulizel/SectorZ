@@ -6,7 +6,7 @@ export type PickupKind = 'ammo' | 'health' | 'grenade';
 /** Loot tunables. */
 export const LOOT = {
   ammoChance: 0.3,
-  healthChance: 0.12,
+  healthChance: 0.15,
   grenadeChance: 0.05,
   ammoAmount: 30, // SMG rounds
   shellAmount: 6, // shotgun shells

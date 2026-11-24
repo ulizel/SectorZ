@@ -5,11 +5,11 @@
 import type { ZombieKind } from '../entities/zombie';
 
 export const WAVES = {
-  firstDelay: 3, // s before wave 1
+  firstDelay: 4, // s before wave 1 (time to look around in the dark)
   breakTime: 8, // s between waves
-  baseCount: 6, // zombies in wave 1
+  baseCount: 5, // zombies in wave 1
   perWave: 3, // extra zombies per wave
-  spawnInterval: 1.6, // s between spawns in wave 1…
+  spawnInterval: 1.8, // s between spawns in wave 1…
   minSpawnInterval: 0.6, // …shrinking to this
   speedPerWave: 0.05, // +5% walk speed per wave
   maxSpeedMul: 1.45,
