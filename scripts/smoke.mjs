@@ -410,10 +410,10 @@ async function survival(browser) {
   await page.evaluate(() => { const g = window.__SECTORZ__.game; g.pickups.spawn('ammo', g.player.x + 0.3, g.player.z); });
   await ticks(page, 10);
   check('walking over ammo adds SMG reserve', (await state(page)).smgReserve > before, `${before} → ${(await state(page)).smgReserve}`);
-  const gBefore = (await state(page)).grenades;
-  await page.evaluate(() => { const g = window.__SECTORZ__.game; g.pickups.spawn('grenade', g.player.x - 0.3, g.player.z); });
+  // (start below the cap: the random upgrade card picked above may have raised or filled it)
+  await page.evaluate(() => { const g = window.__SECTORZ__.game; g.player.grenades = 1; g.pickups.spawn('grenade', g.player.x - 0.3, g.player.z); });
   await ticks(page, 10);
-  check('walking over a grenade pickup adds a grenade', (await state(page)).grenades === Math.min(5, gBefore + 1), `${gBefore} → ${(await state(page)).grenades}`);
+  check('walking over a grenade pickup adds a grenade', (await state(page)).grenades === 2, `1 → ${(await state(page)).grenades}`);
   await page.evaluate(() => { window.__SECTORZ__.game.player.health = 0; });
   await ticks(page, 10);
   const deadText = await page.evaluate(() => document.querySelector('#dead .kills').textContent);
