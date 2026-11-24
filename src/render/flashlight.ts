@@ -7,16 +7,17 @@ export const FLASHLIGHT = {
   angle: 0.27, // rad, half-angle of the cone (~31° total)
   penumbra: 0.55,
   range: 16, // m
-  intensity: 140,
+  intensity: 220,
   height: 1.3, // hand height
   /** Where the beam centre meets the ground (m ahead): tilted down so it lights the floor. */
   groundAt: 9,
   /** Visible light-shaft length (m) and brightness. */
   beamLength: 9,
-  beamStrength: 0.3,
-  /** Soft key light on the player (from the camera side, above) so the character always reads. */
-  glowRange: 5,
-  glowIntensity: 9,
+  beamStrength: 0.55,
+  /** "Aura": a soft light above the player that falls off with distance → the world fades to black
+   *  the further it is from you (zombies appear out of the dark right next to you). */
+  glowRange: 7.5,
+  glowIntensity: 16,
 };
 
 const DUST = 48;
@@ -39,22 +40,22 @@ export class Flashlight {
 
   constructor(scene: THREE.Scene, quality: QualityPreset, private readonly physics: PhysicsWorld) {
     const F = FLASHLIGHT;
-    this.spot = new THREE.SpotLight(0xfff4e2, F.intensity, F.range, F.angle, F.penumbra, 1.6);
+    this.spot = new THREE.SpotLight(0xffd88a, F.intensity, F.range, F.angle, F.penumbra, 1.6);
     this.spot.castShadow = quality.shadows;
     const sz = quality.name === 'mobile' ? 512 : 1024;
     this.spot.shadow.mapSize.set(sz, sz);
     this.spot.shadow.camera.near = 0.3;
     this.spot.shadow.camera.far = F.range;
-    this.spot.shadow.bias = -0.0008;
-    this.spot.shadow.normalBias = 0.02;
-    this.glow = new THREE.PointLight(0xdfe6f5, F.glowIntensity, F.glowRange, 2);
+    this.spot.shadow.bias = -0.002; // generous bias: no shadow-acne stripes inside the beam
+    this.spot.shadow.normalBias = 0.06;
+    this.glow = new THREE.PointLight(0xc8d2e8, F.glowIntensity, F.glowRange, 1.8);
     scene.add(this.spot, this.spot.target, this.glow);
 
     // Light shaft: open cone along +Z from the hand, apex at the origin. The shader fades it along
     // its length and toward its silhouette edges, so it reads as light in the air, not a solid.
-    const geo = new THREE.ConeGeometry(1, 1, 20, 1, true).translate(0, -0.5, 0).rotateX(-Math.PI / 2);
+    const geo = new THREE.ConeGeometry(1, 1, 64, 1, true).translate(0, -0.5, 0).rotateX(-Math.PI / 2);
     const mat = new THREE.ShaderMaterial({
-      uniforms: { uStrength: { value: F.beamStrength }, uColor: { value: new THREE.Color(0xfff0dc) } },
+      uniforms: { uStrength: { value: F.beamStrength }, uColor: { value: new THREE.Color(0xffd27a) } },
       vertexShader: /* glsl */`
         varying float vT; varying vec3 vN; varying vec3 vView;
         void main() {
@@ -69,10 +70,10 @@ export class Flashlight {
         varying float vT; varying vec3 vN; varying vec3 vView;
         void main() {
           float along = pow(1.0 - clamp(vT, 0.0, 1.0), 1.6) * smoothstep(0.0, 0.08, vT);
-          float edge = pow(abs(dot(normalize(vN), normalize(vView))), 1.8);
+          float edge = smoothstep(0.0, 0.9, abs(dot(normalize(vN), normalize(vView))));
           gl_FragColor = vec4(uColor * along * edge * uStrength, 1.0);
         }`,
-      transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+      transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.FrontSide, // one side: no overlapping streaks
     });
     this.cone = new THREE.Mesh(geo, mat);
     this.cone.frustumCulled = false;
@@ -85,7 +86,11 @@ export class Flashlight {
       this.dustP[i * 3] = Math.random(); this.dustP[i * 3 + 1] = Math.random() * 6.28; this.dustP[i * 3 + 2] = Math.sqrt(Math.random());
     }
     this.beam = new THREE.Group();
-    this.beam.add(this.cone, this.dust);
+    // Glowing lens: a hot core inside a soft warm halo (additive, at the beam origin).
+    const lensMat = (c: number) => new THREE.MeshBasicMaterial({ color: c, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+    const halo = new THREE.Mesh(new THREE.IcosahedronGeometry(0.16, 1), lensMat(0x6a4a14));
+    const core = new THREE.Mesh(new THREE.IcosahedronGeometry(0.055, 1), lensMat(0xfff2c0));
+    this.beam.add(this.cone, this.dust, halo, core);
     scene.add(this.beam);
   }
 
@@ -99,7 +104,7 @@ export class Flashlight {
     this.spot.position.set(ox, F.height, oz);
     this.spot.target.position.set(x + dx * F.groundAt, 0, z + dz * F.groundAt);
     this.spot.target.updateMatrixWorld();
-    this.glow.position.set(x, 2.6, z + 1.4); // camera side: lights the front the camera sees
+    this.glow.position.set(x, 3.2, z + 0.6); // above (slightly camera-side): radial falloff on the floor, lights the character's front
     if (!on) return;
 
     // The shaft stops at the first wall/prop in front (it's fake, so clip it ourselves).
