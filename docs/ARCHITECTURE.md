@@ -117,7 +117,8 @@ Tests: `npm test` (Vitest, headless Rapier; ~68 tests) and `npm run build && npm
 ## Next up
 
 - **P5** (chunks): 1 ✅ runner + brute types (`ZOMBIE_TYPES` in `src/entities/zombie.ts`, wave mix in `waveTuning`);
-  2 ✅ exploder (`EXPLODER`, fuse in AI + `Game.updateExploders`); 3 upgrades between waves (pick 1 of 3); 4 more props.
+  2 ✅ exploder (`EXPLODER`, fuse in AI + `Game.updateExploders`); 3 ✅ upgrades (`src/systems/upgrades.ts`, cards in `Hud.showUpgrades`;
+  break waits for a pick) + fixed per-wave rosters (`waveRoster`) + Lab type spawning; 4 more props.
 
 ## Roadmap
 

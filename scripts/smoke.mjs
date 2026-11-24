@@ -393,6 +393,18 @@ async function survival(browser) {
   }
   const a = await state(page);
   check('killing the whole wave clears it (break before wave 2)', a.waveState === 'break' && a.wave === 1 && a.kills >= 6, `state=${a.waveState} kills=${a.kills}`);
+  // Upgrade cards: shown after the wave; the break waits; clicking one applies it.
+  const u0 = await state(page);
+  const timer0 = await page.evaluate(() => window.__SECTORZ__.game.waves.timer);
+  await ticks(page, 90);
+  const timer1 = await page.evaluate(() => window.__SECTORZ__.game.waves.timer);
+  check('upgrade cards shown after the wave, break waits for a pick', u0.upgradeChoices?.length === 3 && timer1 === timer0
+    && await page.evaluate(() => document.querySelectorAll('#upgrades.on .card').length === 3), `choices=${u0.upgradeChoices} timer ${timer0}→${timer1}`);
+  await page.click('#upgrades .card');
+  await ticks(page, 5);
+  const u1 = await state(page);
+  check('clicking a card takes the upgrade and resumes the break', u1.upgradesTaken === 1 && u1.upgradeChoices === null && u1.shots === u0.shots
+    && !(await page.evaluate(() => document.getElementById('upgrades').classList.contains('on'))), `taken=${u1.upgradesTaken} shots=${u1.shots - u0.shots}`);
   // Loot: drop an ammo box at the player's feet → collected into SMG reserve.
   const before = a.smgReserve;
   await page.evaluate(() => { const g = window.__SECTORZ__.game; g.pickups.spawn('ammo', g.player.x + 0.3, g.player.z); });

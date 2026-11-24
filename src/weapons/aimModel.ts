@@ -17,11 +17,16 @@ export const STEADY_TIME = 0.5;
 export const STEADY_BONUS = 0.45;
 /** Stance: movement bloom at full running speed (walking slowly costs proportionally less). */
 export const MOVE_BLOOM = 2.2;
+/** Vertical recoil decay (1/s) and cap (rad): quick follow-up pistol shots climb toward the head. */
+export const PITCH_DECAY = 2.5;
+export const MAX_PITCH = 0.1;
 
 export class AimModel {
   angle = 0; // radians, atan2(x, z)
   bloom = 0; // extra spread multiplier: spread = def.spread * (1 + bloom)
   angularVel = 0;
+  /** Vertical recoil (rad, + = up) added to the next shot's pitch; decays back to 0. */
+  pitch = 0;
   /** 0..1: how settled the aim is (held still, not moving, not just fired). */
   steady = 0;
 
@@ -54,6 +59,7 @@ export class AimModel {
     // Stance: standing is accurate, walking widens, running is worst (quadratic: slow walk is cheap).
     const target = Math.min(MAX_BLOOM, this.angularVel * 0.35 + moveFrac * moveFrac * MOVE_BLOOM);
     const rate = target > this.bloom ? 10 : def.settle; // blooms fast, settles at weapon rate
+    this.pitch *= Math.exp(-PITCH_DECAY * dt);
     this.bloom += (target - this.bloom) * (1 - Math.exp(-rate * dt));
     // Steady-aim: build up while still and settled, lose it instantly on movement/turning.
     const still = this.angularVel < 0.08 && moveFrac < 0.05 && this.bloom < 0.25;
@@ -64,6 +70,7 @@ export class AimModel {
   onShot(def: WeaponDef, burstIndex = 1, rand: () => number = Math.random): void {
     this.bloom = Math.min(MAX_BLOOM, this.bloom + def.recoilBloom);
     this.steady = 0;
+    this.pitch = Math.min(MAX_PITCH, this.pitch + (def.pitchKick ?? 0));
     const pat = def.recoilPattern;
     const kick = pat[(burstIndex - 1) % pat.length] + (rand() * 2 - 1) * def.aimKick;
     this.angle += kick; // learnable pattern + a little noise; the stick pulls it back

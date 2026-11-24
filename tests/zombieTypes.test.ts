@@ -5,7 +5,7 @@ import { ZOMBIE_TYPES, EXPLODER } from '../src/entities/zombie';
 import { ZombieAI, type AttackResult } from '../src/ai/zombieAI';
 import { PART_INDEX } from '../src/rigs/humanoid';
 import { SIM_DT } from '../src/config';
-import { waveTuning } from '../src/systems/waves';
+import { waveTuning, waveRoster } from '../src/systems/waves';
 
 beforeAll(async () => { await initPhysics(); });
 
@@ -71,12 +71,16 @@ describe('zombie types', () => {
     p.free();
   });
 
-  it('special zombies join later waves', () => {
-    expect(waveTuning(1).runnerChance + waveTuning(1).bruteChance).toBe(0);
-    expect(waveTuning(3).runnerChance).toBeGreaterThan(0);
-    expect(waveTuning(4).bruteChance).toBe(0);
-    expect(waveTuning(6).bruteChance).toBeGreaterThan(0);
-    expect(waveTuning(3).exploderChance).toBe(0);
-    expect(waveTuning(4).exploderChance).toBeGreaterThan(0);
+  it('each wave has a fixed, growing mix of specials spread through it', () => {
+    const count = (r: string[], k: string) => r.filter((x) => x === k).length;
+    const r1 = waveRoster(1, waveTuning(1).count), r3 = waveRoster(3, waveTuning(3).count);
+    const r5 = waveRoster(5, waveTuning(5).count), r8 = waveRoster(8, waveTuning(8).count);
+    expect(r1.every((k) => k === 'walker')).toBe(true);
+    expect([count(r3, 'runner'), count(r3, 'exploder'), count(r3, 'brute')]).toEqual([1, 0, 0]);
+    expect([count(r5, 'runner'), count(r5, 'exploder'), count(r5, 'brute')]).toEqual([3, 2, 1]);
+    expect(count(r8, 'brute')).toBe(2);
+    expect(waveRoster(5, waveTuning(5).count)).toEqual(r5); // deterministic
+    expect(r5.indexOf('brute')).toBeGreaterThanOrEqual(r5.length / 2); // brutes come late
+    expect(r5.length).toBe(waveTuning(5).count);
   });
 });

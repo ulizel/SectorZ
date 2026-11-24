@@ -69,10 +69,26 @@ export class Hud {
   }
 
   /** Wave status line (top-left HUD column). */
-  wave(state: 'waiting' | 'active' | 'break', n: number, left: number, timer: number): void {
-    const txt = state === 'active' ? `WAVE ${n} · ${left} LEFT` : `NEXT WAVE IN ${Math.ceil(Math.max(0, timer))}`;
+  wave(state: 'waiting' | 'active' | 'break', n: number, left: number, timer: number, choosing = false): void {
+    const txt = state === 'active' ? `WAVE ${n} · ${left} LEFT` : choosing ? 'PICK AN UPGRADE' : `NEXT WAVE IN ${Math.ceil(Math.max(0, timer))}`;
     if (txt !== this.lastWave) { this.waveEl.textContent = txt; this.lastWave = txt; }
   }
+
+  /** Upgrade cards (pick 1). Taps/clicks never reach the game's input layer. */
+  showUpgrades(list: readonly { name: string; desc: string }[], pick: (i: number) => void): void {
+    const el = document.getElementById('upgrades')!, cards = el.querySelector('.cards')!;
+    cards.innerHTML = '';
+    list.forEach((u, i) => {
+      const b = document.createElement('button');
+      b.className = 'card';
+      b.innerHTML = `<b>${u.name}</b><span>${u.desc}</span>`;
+      b.addEventListener('pointerdown', (e) => { e.stopPropagation(); e.preventDefault(); pick(i); });
+      cards.appendChild(b);
+    });
+    el.classList.add('on');
+  }
+
+  hideUpgrades(): void { document.getElementById('upgrades')!.classList.remove('on'); }
 
   /** Big centred announcement (fades after ~2.5 s). */
   banner(big: string, small = ''): void {

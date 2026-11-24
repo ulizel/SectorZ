@@ -116,8 +116,15 @@ function enterLab(game: Game): void {
   game.lab = true;
   document.body.classList.add('lab');
   game.spawnZombies(5);
+  // Type button cycles what SPAWN makes (key X).
+  const kinds = [['walker', 'WALK'], ['runner', 'RUN'], ['brute', 'BRUTE'], ['exploder', 'BOOM'], ['mix', 'MIX']] as const;
+  let kind = 0;
   const actions: Record<string, (btn?: HTMLElement) => void> = {
-    spawn: () => game.spawnZombies(5),
+    spawn: () => game.spawnZombies(5, kinds[kind][0]),
+    type: (btn) => {
+      kind = (kind + 1) % kinds.length;
+      (btn ?? document.querySelector('[data-lab="type"]'))!.textContent = kinds[kind][1];
+    },
     boom: () => game.explodeAtAim(),
     slow: (btn) => {
       game.loop.timeScale = game.loop.timeScale === 1 ? 0.25 : 1;
@@ -132,7 +139,7 @@ function enterLab(game: Game): void {
   document.querySelectorAll<HTMLElement>('#lab-panel button').forEach((b) => {
     b.addEventListener('pointerdown', (e) => { e.stopPropagation(); e.preventDefault(); actions[b.dataset.lab!](b); });
   });
-  const keys: Record<string, string> = { KeyZ: 'spawn', KeyB: 'boom', KeyT: 'slow', KeyC: 'clear', KeyI: 'ai' };
+  const keys: Record<string, string> = { KeyX: 'type', KeyZ: 'spawn', KeyB: 'boom', KeyT: 'slow', KeyC: 'clear', KeyI: 'ai' };
   addEventListener('keydown', (e) => { const a = keys[e.code]; if (a && !e.repeat) actions[a](); });
 }
 

@@ -38,6 +38,8 @@ export interface WeaponDef {
    * A boosted pellet beats limbs' break impulses (they tear off at once) and slams the body back.
    */
   closeBoost?: { range: number; fade: number; mul: number };
+  /** Vertical recoil (rad): each shot lifts the next shot's pitch; decays over ~0.3 s (pistol → headshots). */
+  pitchKick?: number;
   /** Multiplier on damage dealt to a limb's own health (how fast it tears limbs off). */
   limbMult: number;
   /** Hit-reaction strength on zombies (pistol: clear jolt per shot; SMG: small tremors that build). */
@@ -59,6 +61,7 @@ export const WEAPONS: Record<string, WeaponDef> = {
     recoilPattern: [0], penetration: 0.7, pushback: 0.9, activeWindow: [0.45, 0.62], casingSound: false, reserveStart: Infinity, reserveMax: Infinity,
     bulletSpeed: 70, vSpread: 0.06, limbMult: 1, flinch: 1.8,
     traceWidth: 0.06, traceLength: 0.9, falloffStart: 40, shellReload: false,
+    pitchKick: 0.035,
   },
   smg: {
     id: 'smg', name: 'SMG', damage: 21, fireInterval: 0.085, magSize: 30, reloadTime: 1.6,
@@ -100,7 +103,8 @@ export class WeaponState {
   private sinceShot = 99;
   private dryCooldown = 0;
 
-  constructor(readonly def: WeaponDef) {
+  /** Per-run copy of the weapon's stats (upgrades modify it; restart restores WEAPONS). */
+  constructor(public def: WeaponDef) {
     this.ammo = def.magSize;
     this.reserve = def.reserveStart;
   }

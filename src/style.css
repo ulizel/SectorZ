@@ -98,7 +98,7 @@ body.touch #aim-toggle { display: block; }
   border: 2px solid rgba(255,255,255,0.45); padding: 10px 20px; cursor: pointer; touch-action: none; }
 #start-lab:disabled { opacity: 0.4; }
 #lab-panel { display: none; position: absolute; left: 50%; transform: translateX(-50%); top: calc(max(12px, env(safe-area-inset-top)) + 96px);
-  gap: 6px; pointer-events: auto; }
+  gap: 6px; pointer-events: auto; flex-wrap: wrap; justify-content: center; width: max-content; max-width: 94vw; }
 body.lab #lab-panel { display: flex; }
 #lab-panel button { background: var(--panel); color: var(--ink); border: 1px solid rgba(255,255,255,0.3); font: 700 12px var(--font);
   padding: 9px 10px; letter-spacing: 1px; touch-action: none; }
@@ -143,3 +143,14 @@ body.lab #wave-info { display: none; }
   color: #b6f07a; text-shadow: 0 2px 0 #000; opacity: 0; transition: opacity 0.3s, transform 0.3s; white-space: nowrap; }
 #toast.on { opacity: 1; transform: translate(-50%, -10px); }
 #dead .best { color: #ffd34a; }
+
+/* Upgrade cards between waves (only the cards take touches: you can still move during the pick). */
+#upgrades { position: absolute; left: 50%; top: 40%; transform: translate(-50%, -50%); display: none; flex-direction: column;
+  align-items: stretch; gap: 8px; width: min(320px, 86vw); pointer-events: none; }
+#upgrades.on { display: flex; animation: deadin 0.3s ease-out; }
+#upgrades .title { text-align: center; font-size: 13px; letter-spacing: 3px; text-shadow: 0 2px 0 #000; }
+#upgrades .card { width: 100%; pointer-events: auto; touch-action: none; display: flex; flex-direction: column; gap: 3px; text-align: left;
+  background: rgba(16, 20, 26, 0.85); color: var(--ink); border: 2px solid rgba(255, 179, 71, 0.65); padding: 11px 14px;
+  font: 13px var(--font); cursor: pointer; }
+#upgrades .card b { font-size: 15px; letter-spacing: 2px; color: #ffb347; }
+#upgrades .card:active { background: rgba(255, 140, 40, 0.35); }

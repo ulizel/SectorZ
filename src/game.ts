@@ -11,7 +11,7 @@ import { Player } from './entities/player';
 import { ZombieManager } from './entities/zombieManager';
 import type { Zombie } from './entities/zombie';
 import { ZombieRenderer } from './render/zombieRenderer';
-import { EXPLODER } from './entities/zombie';
+import { EXPLODER, type ZombieKind } from './entities/zombie';
 import { ZombieAI, AI as AI_CFG, type AttackResult } from './ai/zombieAI';
 import { ARENA } from './config';
 import { WaveDirector, WEAPON_UNLOCKS, type WaveEvent } from './systems/waves';
@@ -19,7 +19,8 @@ import { Pickups, LOOT, type PickupKind } from './systems/pickups';
 import { Group, groups, ALL, PhysicsWorld, MATERIAL_COST, type RayHit } from './physics/physicsWorld';
 import { BulletViews, type BulletVisual } from './render/bulletViews';
 import { WeaponVfx, TRACER_STYLES } from './render/weaponVfx';
-import type { WeaponDef } from './weapons/weapon';
+import { WEAPONS, type WeaponDef } from './weapons/weapon';
+import { rollUpgrades, type Upgrade } from './systems/upgrades';
 import { Renderer } from './render/renderer';
 import { HumanoidRig, SURVIVOR_LOOK } from './render/humanoidRig';
 import { BulletHoles, MuzzleFlash, ParticleSystem } from './render/effects';
@@ -106,6 +107,12 @@ export class Game {
   private visYaw = 0;
   private time = 0;
   private readonly weaponEvents: WeaponEvent[] = [];
+  /** Grenade blast radius multiplier (DEMOLITION upgrade). */
+  grenadeRadiusMul = 1;
+  /** Upgrades taken this run (id → times). */
+  readonly upgradesTaken = new Map<string, number>();
+  /** Cards on offer during the break (null = none); the break countdown waits for a pick. */
+  upgradeChoices: Upgrade[] | null = null;
   /** Live grenades (simulation). */
   readonly grenades: Grenade[] = [];
   private grenadeMode = false;
@@ -381,7 +388,7 @@ export class Game {
       // Gaussian-ish spread (sum of two uniforms): most shots near the centre, few at the edge.
       const a = this.aim.angle + ((Math.random() + Math.random()) - 1) * spread;
       // Subtle vertical scatter, biased low (some shots catch legs instead of always the chest).
-      const pitch = -Math.random() * def.vSpread + Math.random() * def.vSpread * 0.25;
+      const pitch = -Math.random() * def.vSpread + Math.random() * def.vSpread * 0.25 + this.aim.pitch;
       const c = Math.cos(pitch);
       const dx = Math.sin(a) * c, dy = Math.sin(pitch), dz = Math.cos(a) * c;
       this.stats.shots++;
@@ -547,7 +554,7 @@ export class Game {
     this.arcDots.count = n;
     this.arcDots.instanceMatrix.needsUpdate = true;
     this.blastRing.position.set(end.x, 0.03, end.z);
-    this.blastRing.scale.setScalar(GRENADE.radius * (1 + 0.02 * Math.sin(this.time * 8)));
+    this.blastRing.scale.setScalar(GRENADE.radius * this.grenadeRadiusMul * (1 + 0.02 * Math.sin(this.time * 8)));
   }
 
   private wireEffects(): void {
@@ -735,8 +742,8 @@ export class Game {
     this.renderer.updateCamera(x, z, this.aimX, this.aimZ, frameDt);
     this.renderer.render();
 
-    this.hud.update(p.weapon, p.health, PLAYER.maxHealth, p.grenades);
-    if (this.survival && !this.lab) this.hud.wave(this.waves.state, this.waves.wave, this.waves.remaining(this.zombies.aliveCount), this.waves.timer);
+    this.hud.update(p.weapon, p.health, p.maxHealth, p.grenades);
+    if (this.survival && !this.lab) this.hud.wave(this.waves.state, this.waves.wave, this.waves.remaining(this.zombies.aliveCount), this.waves.timer, !!this.upgradeChoices);
     this.debug.update(frameDt, this.renderer.renderer, {
       physicsMs: this.physics.lastStepMs,
       ragdolls: this.zombies.ragdollCount,
@@ -798,7 +805,14 @@ export class Game {
   restart(): void {
     this.zombies.clear();
     const p = this.player;
-    p.health = PLAYER.maxHealth;
+    // Per-run stats back to base (upgrades are per run).
+    for (const w of p.weapons) w.def = WEAPONS[w.def.id as keyof typeof WEAPONS];
+    p.maxHealth = PLAYER.maxHealth; p.speedMul = 1; p.grenadeMax = GRENADE.max;
+    this.grenadeRadiusMul = 1;
+    this.upgradesTaken.clear();
+    this.upgradeChoices = null;
+    this.hud.hideUpgrades();
+    p.health = p.maxHealth;
     p.body.setNextKinematicTranslation({ x: 0, y: p.body.translation().y, z: 2 });
     p.x = p.prevX = 0; p.z = p.prevZ = 2; p.vx = p.vz = 0;
     for (const w of p.weapons) { w.ammo = w.def.magSize; w.cancelReload(); }
@@ -818,6 +832,8 @@ export class Game {
   private runWaves(dt: number): void {
     if (!this.player.alive) return;
     const max = this.quality.name === 'mobile' ? 8 : 12;
+    // While upgrade cards are up, the break waits for a pick.
+    if (this.upgradeChoices && this.waves.state === 'break') return;
     const n = this.waves.update(dt, this.zombies.aliveCount, max, this.waveEvents);
     for (const e of this.waveEvents) {
       if (e.type === 'waveStart') {
@@ -826,7 +842,7 @@ export class Game {
         this.sfx.waveStart();
         if (unlocked) this.sfx.pickup();
       }
-      else { this.hud.banner(`WAVE ${e.wave} CLEARED`, 'catch your breath'); this.sfx.waveClear(); this.stats.wave = e.wave; this.restockBarrels(); this.giveGrenade(); }
+      else { this.hud.banner(`WAVE ${e.wave} CLEARED`, 'catch your breath'); this.sfx.waveClear(); this.stats.wave = e.wave; this.restockBarrels(); this.giveGrenade(); this.offerUpgrades(); }
     }
     for (let i = 0; i < n; i++) this.spawnWaveZombie();
   }
@@ -850,10 +866,30 @@ export class Game {
     return name;
   }
 
+  /** Between waves: show 3 upgrade cards. */
+  private offerUpgrades(): void {
+    const list = rollUpgrades(this, this.upgradesTaken);
+    if (!list.length) return;
+    this.upgradeChoices = list;
+    this.hud.showUpgrades(list, (i) => this.pickUpgrade(i));
+  }
+
+  /** Take card i (UI tap/click, or tests). */
+  pickUpgrade(i: number): void {
+    const u = this.upgradeChoices?.[i];
+    if (!u) return;
+    u.apply(this);
+    this.upgradesTaken.set(u.id, (this.upgradesTaken.get(u.id) ?? 0) + 1);
+    this.upgradeChoices = null;
+    this.hud.hideUpgrades();
+    this.hud.toast(u.name);
+    this.sfx.pickup();
+  }
+
   /** Clearing a wave earns a grenade (up to the carry limit). */
   private giveGrenade(): void {
     const p = this.player;
-    if (p.grenades >= GRENADE.max) return;
+    if (p.grenades >= p.grenadeMax) return;
     p.grenades++;
     this.hud.toast('+1 GRENADE');
   }
@@ -863,9 +899,7 @@ export class Game {
     for (let tries = 0; tries < 30; tries++) {
       const x = (Math.random() - 0.5) * (ARENA.size - 4), z = (Math.random() - 0.5) * (ARENA.size - 4);
       if (Math.hypot(x - p.x, z - p.z) < 12 || this.ai.nav.isBlocked(x, z)) continue;
-      const r = Math.random();
-      const kind = r < tune.bruteChance ? 'brute' : r < tune.bruteChance + tune.runnerChance ? 'runner'
-        : r < tune.bruteChance + tune.runnerChance + tune.exploderChance ? 'exploder' : 'walker';
+      const kind = this.waves.nextKind;
       const zb = this.zombies.spawn(x, z, Math.atan2(p.x - x, p.z - z), kind);
       zb.baseSpeed *= tune.speedMul;
       zb.hp *= tune.hpMul;
@@ -879,12 +913,12 @@ export class Game {
   private takePickup(k: PickupKind): boolean {
     const p = this.player;
     if (k === 'grenade') {
-      if (p.grenades >= GRENADE.max) return false;
+      if (p.grenades >= p.grenadeMax) return false;
       p.grenades++;
       this.hud.toast('+1 GRENADE');
     } else if (k === 'health') {
-      if (p.health >= PLAYER.maxHealth) return false;
-      p.health = Math.min(PLAYER.maxHealth, p.health + LOOT.healthAmount);
+      if (p.health >= p.maxHealth) return false;
+      p.health = Math.min(p.maxHealth, p.health + LOOT.healthAmount);
       this.hud.toast(`+${LOOT.healthAmount} HEALTH`);
     } else {
       // An ammo box tops up the SMG and gives a few shotgun shells.
@@ -896,13 +930,14 @@ export class Game {
     return true;
   }
 
-  /** Spawn a ring of test zombies in front of the player (Ragdoll Lab). */
-  spawnZombies(n = 5): void {
+  /** Spawn a ring of test zombies in front of the player (Ragdoll Lab); 'mix' = one of each type. */
+  spawnZombies(n = 5, kind: ZombieKind | 'mix' = 'walker'): void {
     const p = this.player;
+    const mix: ZombieKind[] = ['walker', 'runner', 'brute', 'exploder', 'walker'];
     for (let i = 0; i < n; i++) {
       const a = Math.atan2(this.aimX, this.aimZ) + (i - (n - 1) / 2) * 0.32;
       const d = 5 + (i % 2) * 1.2;
-      this.zombies.spawn(p.x + Math.sin(a) * d, p.z + Math.cos(a) * d, a + Math.PI);
+      this.zombies.spawn(p.x + Math.sin(a) * d, p.z + Math.cos(a) * d, a + Math.PI, kind === 'mix' ? mix[i % mix.length] : kind);
     }
   }
 
@@ -1003,7 +1038,7 @@ export class Game {
       const t = g.body.translation();
       this.removeGrenade(i);
       this.stats.grenadeBlasts++;
-      this.explode(t.x, Math.max(0.2, t.y), t.z, GRENADE.radius);
+      this.explode(t.x, Math.max(0.2, t.y), t.z, GRENADE.radius * this.grenadeRadiusMul);
     }
   }
 
@@ -1068,7 +1103,8 @@ export class Game {
       zombiesAlive: this.zombies.aliveCount, ragdolls: this.zombies.ragdollCount, severed: this.zombies.severedCount,
       zombieHits: this.stats.zombieHits, kills: this.stats.kills, dismembers: this.stats.dismembers,
       damageTaken: this.stats.damageTaken, playerAlive: this.player.alive, wave: this.waves.wave, waveState: this.waves.state,
-      grenades: p.grenades, unlocked: p.unlocked, exploderBlasts: this.stats.exploderBlasts, grenadesLive: this.grenades.length, grenadesThrown: this.stats.grenadesThrown,
+      grenades: p.grenades, unlocked: p.unlocked, upgradeChoices: this.upgradeChoices?.map((u) => u.id) ?? null,
+      upgradesTaken: [...this.upgradesTaken.values()].reduce((a, b) => a + b, 0), maxHealth: p.maxHealth, pistolDamage: p.weapons[0].def.damage, exploderBlasts: this.stats.exploderBlasts, grenadesLive: this.grenades.length, grenadesThrown: this.stats.grenadesThrown,
       grenadeBlasts: this.stats.grenadeBlasts, grenadeMode: this.grenadeMode, arcVisible: this.arcDots.visible,
       barrels: this.stats.barrels, explosiveBarrels: this.props.filter((q) => q.explosive).length,
       reserve: p.weapon.reserve, pickups: this.pickups.list.map((q) => q.kind), smgReserve: p.weapons[1].reserve, crawlers: this.zombies.zombies.filter((z) => z.crawler && z.alive).length,

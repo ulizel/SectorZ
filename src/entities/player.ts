@@ -20,6 +20,11 @@ export class Player {
   vx = 0; vz = 0;
   yaw = 0; prevYaw = 0;
   health = PLAYER.maxHealth;
+  // Per-run stats (upgrades raise them; restart resets).
+  maxHealth = PLAYER.maxHealth;
+  /** Move speed multiplier. */
+  speedMul = 1;
+  grenadeMax = GRENADE.max;
   walkPhase = 0;
   /** Movement speed multiplier set by the game each tick (crowds slow you; pinning sets 0). */
   slowMul = 1;
@@ -68,7 +73,8 @@ export class Player {
     if (!this.alive) { cmd.moveX = cmd.moveZ = cmd.aimX = cmd.aimZ = 0; cmd.trigger = cmd.triggerTap = false; }
 
     // Accelerate toward the target velocity (snappy but not instant).
-    const tx = cmd.moveX * PLAYER.moveSpeed * this.slowMul, tz = cmd.moveZ * PLAYER.moveSpeed * this.slowMul;
+    const sp = PLAYER.moveSpeed * this.speedMul * this.slowMul;
+    const tx = cmd.moveX * sp, tz = cmd.moveZ * sp;
     const hasInput = cmd.moveX !== 0 || cmd.moveZ !== 0;
     const rate = hasInput ? PLAYER.accel : PLAYER.decel;
     const dvx = tx - this.vx, dvz = tz - this.vz;
