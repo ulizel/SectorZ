@@ -16,8 +16,8 @@ export const FLASHLIGHT = {
   beamStrength: 0.55,
   /** "Aura": a soft light above the player that falls off with distance → the world fades to black
    *  the further it is from you (zombies appear out of the dark right next to you). */
-  glowRange: 7.5,
-  glowIntensity: 16,
+  glowRange: 5,
+  glowIntensity: 7,
 };
 
 const DUST = 48;
@@ -48,7 +48,7 @@ export class Flashlight {
     this.spot.shadow.camera.far = F.range;
     this.spot.shadow.bias = -0.002; // generous bias: no shadow-acne stripes inside the beam
     this.spot.shadow.normalBias = 0.06;
-    this.glow = new THREE.PointLight(0xc8d2e8, F.glowIntensity, F.glowRange, 1.8);
+    this.glow = new THREE.PointLight(0xc8d2e8, F.glowIntensity, F.glowRange, 2);
     scene.add(this.spot, this.spot.target, this.glow);
 
     // Light shaft: open cone along +Z from the hand, apex at the origin. The shader fades it along

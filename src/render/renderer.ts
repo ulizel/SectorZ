@@ -33,14 +33,14 @@ export class Renderer {
     container.appendChild(this.renderer.domElement);
 
     this.scene.background = new THREE.Color(SKY);
-    this.scene.fog = new THREE.Fog(SKY, 12, 28);
+    this.scene.fog = new THREE.Fog(SKY, 10, 24);
 
     this.camera = new THREE.PerspectiveCamera(CAMERA.fov, innerWidth / innerHeight, 0.5, 120);
 
     // Moonlight: cool blue sky fill + a soft moon, bright enough to read the arena; no moon shadows
     // (the flashlight casts them).
-    this.scene.add(new THREE.HemisphereLight(0x6f8cb8, 0x141a26, 0.22));
-    this.sun = new THREE.DirectionalLight(0x9db6e2, 0.12);
+    this.scene.add(new THREE.HemisphereLight(0x6f8cb8, 0x141a26, 0.1));
+    this.sun = new THREE.DirectionalLight(0x9db6e2, 0.05);
     this.sun.position.set(-12, 22, 8);
     this.sun.castShadow = false;
     const s = this.sun.shadow;

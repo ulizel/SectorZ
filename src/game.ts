@@ -165,6 +165,9 @@ export class Game {
     void ({} as Zombie);
     for (const p of this.props) { const t = p.body.translation(); this.propStart.set(p, new THREE.Vector3(t.x, t.y, t.z)); }
     this.player = new Player(1, this.physics, 0, 2);
+    // The player holds the flashlight: their own arm/gun right in front of it would throw a huge
+    // blocky shadow into the beam, so the player model casts no shadows (props and zombies still do).
+    this.rig.root.traverse((o) => { o.castShadow = false; });
     scene.add(this.rig.root);
 
     this.sparks = new ParticleSystem(quality.maxSparks, { emissive: true });
