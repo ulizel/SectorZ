@@ -67,7 +67,7 @@ describe('zombie types', () => {
     }
     expect(z.fuse).toBe(EXPLODER.fuse);
     expect(hits).toBe(0);
-    expect(Math.hypot(z.x, z.z)).toBeLessThan(1.6);
+    expect(Math.hypot(z.x, z.z)).toBeLessThan(1.8);
     p.free();
   });
 

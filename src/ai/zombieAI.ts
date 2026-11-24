@@ -12,11 +12,11 @@ export const AI = {
   turnRate: 4, // rad/s
   crawlSpeed: 0.55,
   wanderSpeed: 0.45,
-  attackRange: 1.05, // start an attack when this close (m, centre to centre)
+  attackRange: 1.3, // start an attack when this close (m, centre to centre)
   crawlAttackRange: 0.95,
-  strikeReach: 1.35, // hit lands if the player is still within this at the strike
-  windup: 0.6, // s (dodge window; generous because at night you see them late)
-  recover: 0.7,
+  strikeReach: 1.8, // hit lands if the player is still within this at the strike
+  windup: 0.3, // s (short dodge window: you must react to the snarl)
+  recover: 0.45,
   damage: 12,
   separation: 0.85, // personal space between zombies (m)
 };
