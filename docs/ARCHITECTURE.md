@@ -95,7 +95,7 @@ Key systems and where they live:
 | Zombie AI (flow-field nav grid, senses, separation, prop avoidance + limited push, stuck detour, attacks) | `src/ai/navGrid.ts`, `src/ai/zombieAI.ts` |
 | Instanced zombie rendering (11 draw calls for any crowd) | `src/render/zombieRenderer.ts` |
 | Waves, loot | `src/systems/waves.ts`, `src/systems/pickups.ts` |
-| Arena, props, explosive barrels | `src/world/arena.ts` |
+| Arena, props (crates, explosive barrels, dumpsters, cones; static sandbag walls — bullets fly over), burning wreck | `src/world/arena.ts`, `Game.updateFires` |
 | Grenades (💣 arms → right stick aims arc, push further = further, lift throws; desktop hold G; CCD box, bounce, 2 s fuse → `game.explode`; drop at a living zombie's feet; 3 at start, +1 per cleared wave, max 5) | `src/weapons/grenade.ts`, `src/game.ts` (`resolveGrenade`, `throwGrenade`, `updateGrenades`, `updateGrenadeArc`), `src/input/touchSticks.ts` |
 | HUD (top-left column: wave, health, weapon/ammo/💣; touch buttons R/💣/⇄ bottom-right), pause menu, Lab panel | `src/ui/hud.ts`, `src/main.ts`, `index.html`, `src/style.css` |
 | Weapon unlocks (survival: pistol → SMG wave 2 → shotgun wave 4; Lab/?nozombies: all) | `WEAPON_UNLOCKS` in `src/systems/waves.ts`, `Player.unlocked`, `Game.unlockWeapons` |
@@ -118,7 +118,7 @@ Tests: `npm test` (Vitest, headless Rapier; ~68 tests) and `npm run build && npm
 
 - **P5** (chunks): 1 ✅ runner + brute types (`ZOMBIE_TYPES` in `src/entities/zombie.ts`, wave mix in `waveTuning`);
   2 ✅ exploder (`EXPLODER`, fuse in AI + `Game.updateExploders`); 3 ✅ upgrades (`src/systems/upgrades.ts`, cards in `Hud.showUpgrades`;
-  break waits for a pick) + fixed per-wave rosters (`waveRoster`) + Lab type spawning; 4 more props.
+  break waits for a pick) + fixed per-wave rosters (`waveRoster`) + Lab type spawning; 4 ✅ props (sandbag walls, dumpsters, cones, burning wreck `FIRES`).
 
 ## Roadmap
 
@@ -129,6 +129,6 @@ Tests: `npm test` (Vitest, headless Rapier; ~68 tests) and `npm run build && npm
 | P2 Ragdoll Lab | Ragdoll builder, anim→ragdoll handoff, bullet/explosion reactions, breakable joints, limb pool + caps | ✅ |
 | P3 Zombie AI | Walker, flow-field pathing, separation, attacks, hit reactions, crawlers | ✅ |
 | P4 Combat loop | Shotgun/SMG/grenade, explosive barrels, loot, waves, HUD, audio | ✅ |
-| P5 Progression | Upgrades, runner/brute/exploder types, more props | |
+| P5 Progression | Upgrades, runner/brute/exploder types, more props | ✅ |
 | P6 Polish & perf | Lighting/VFX, quality presets | |
 | P7 Co-op prep | Net transport interface, host-authoritative sim prototype | |

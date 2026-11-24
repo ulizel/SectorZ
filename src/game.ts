@@ -24,7 +24,7 @@ import { rollUpgrades, type Upgrade } from './systems/upgrades';
 import { Renderer } from './render/renderer';
 import { HumanoidRig, SURVIVOR_LOOK } from './render/humanoidRig';
 import { BulletHoles, MuzzleFlash, ParticleSystem } from './render/effects';
-import { buildArena, spawnBarrel, type DynamicProp } from './world/arena';
+import { buildArena, spawnBarrel, FIRES, type DynamicProp } from './world/arena';
 import { Hud } from './ui/hud';
 import { DebugOverlay } from './ui/debugOverlay';
 import type { WeaponEvent } from './weapons/weapon';
@@ -126,6 +126,7 @@ export class Game {
   private readonly blood: BulletHoles;
   private readonly impacts: import('./entities/zombieManager').ImpactResult[] = [];
   private thudCooldown = 0;
+  private fireT = 0; // flame emission accumulator (burning wreck)
   private readonly hitMarker = document.getElementById('hitmarker')!;
   private hitMarkerT = 0;
   private readonly retMat: THREE.MeshBasicMaterial;
@@ -531,6 +532,23 @@ export class Game {
     this.dangerRingMat.opacity = 0.55 + 0.4 * Math.abs(Math.sin(this.time * (6 + 14 * progress)));
   }
 
+  /** Burning wreck: rising flame cubes, a few embers and dark smoke (rate-based, frame-rate independent). */
+  private updateFires(dt: number): void {
+    this.fireT += dt * 45;
+    while (this.fireT >= 1) {
+      this.fireT -= 1;
+      for (const [fx, fy, fz] of FIRES) {
+        const x = fx + (Math.random() - 0.5) * 1.4, z = fz + (Math.random() - 0.5) * 0.9;
+        this.sparks.emit(x, fy + Math.random() * 0.2, z, (Math.random() - 0.5) * 0.4, 1.4 + Math.random() * 1.2, (Math.random() - 0.5) * 0.4,
+          0.1 + Math.random() * 0.12, 0.35 + Math.random() * 0.3, Math.random() < 0.4 ? 0xffd04a : Math.random() < 0.6 ? 0xff8a2a : 0xe8441c, 0, -3, 1.5, 3);
+        if (Math.random() < 0.1) this.sparks.emit(x, fy + 0.4, z, (Math.random() - 0.5) * 1.5, 2.5 + Math.random() * 2, (Math.random() - 0.5) * 1.5,
+          0.03, 0.8 + Math.random() * 0.6, 0xffb347, 0.2, 1.5, 0.8, 6);
+        if (Math.random() < 0.15) this.debris.emit(x, fy + 0.8, z, (Math.random() - 0.5) * 0.3, 0.8 + Math.random() * 0.4, (Math.random() - 0.5) * 0.3,
+          0.25 + Math.random() * 0.2, 1.6 + Math.random() * 0.8, Math.random() < 0.5 ? 0x2b2b2d : 0x3a3a3c, 0, -0.6, 0.6, 1);
+      }
+    }
+  }
+
   /** Grenade throw preview: the same ballistic path the throw will take, cut at the first obstacle. */
   private updateGrenadeArc(px: number, pz: number): void {
     const show = this.grenadeMode && (this.throwX !== 0 || this.throwZ !== 0) && this.player.alive;
@@ -731,6 +749,7 @@ export class Game {
     }
     for (let i = warn; i < this.dangerZones.length; i++) this.dangerZones[i].visible = false;
 
+    this.updateFires(frameDt);
     this.flash.update(frameDt);
     this.bulletViews.update(this.bullets, alpha);
     this.vfx.update(this.bullets, alpha, frameDt);
