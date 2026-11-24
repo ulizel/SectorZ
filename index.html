@@ -10,18 +10,23 @@
   </head>
   <body>
     <div id="app"></div>
+    <div id="vignette"></div>
     <div id="touch"></div>
 
     <div id="hud">
-      <div id="health"><div id="health-fill"></div></div>
-      <div id="weapon">
-        <div id="weapon-name">PISTOL</div>
-        <div id="ammo-row"><span id="ammo">12</span><span id="reserve">/ ∞</span></div>
-        <div id="ammo-warn"></div>
-        <div id="reload"><div id="reload-sweet"></div><div id="reload-bar"></div></div>
+      <!-- Top-left column: wave, health, weapon/ammo/grenades, reload (keeps the thumb areas clear). -->
+      <div id="hud-top">
+        <div id="wave-info"></div>
+        <div id="health"><div id="health-fill"></div></div>
+        <div id="weapon">
+          <div id="ammo-row"><span id="weapon-name">PISTOL</span><span id="ammo">12</span><span id="reserve">/ ∞</span><span id="grenade-count">💣3</span></div>
+          <div id="ammo-warn"></div>
+          <div id="reload"><div id="reload-sweet"></div><div id="reload-bar"></div></div>
+        </div>
       </div>
       <button id="reload-btn" aria-label="Reload">R</button>
       <button id="switch-btn" aria-label="Switch weapon">⇄</button>
+      <button id="grenade-btn" aria-label="Grenade">💣<span>3</span></button>
       <button id="pause-btn" aria-label="Pause">II</button>
       <button id="fps-toggle" aria-label="Toggle performance overlay">FPS</button>
       <button id="aim-toggle" aria-label="Toggle aim direction">AIM: PULL</button>
@@ -29,8 +34,9 @@
       <div id="wave-info"></div>
       <div id="banner"><div class="big"></div><div class="small"></div></div>
       <div id="toast"></div>
+      <div id="upgrades"><div class="title">CHOOSE AN UPGRADE</div><div class="cards"></div></div>
       <div id="lab-panel">
-        <button data-lab="spawn">SPAWN</button><button data-lab="boom">BOOM</button><button data-lab="slow">SLOW</button><button data-lab="ai" class="on">AI</button><button data-lab="clear">CLEAR</button>
+        <button data-lab="type">WALK</button><button data-lab="spawn">SPAWN</button><button data-lab="boom">BOOM</button><button data-lab="slow">SLOW</button><button data-lab="ai" class="on">AI</button><button data-lab="clear">CLEAR</button>
       </div>
       <div id="hitmarker"><i></i><i></i><i></i><i></i></div>
     </div>

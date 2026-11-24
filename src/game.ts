@@ -11,21 +11,26 @@ import { Player } from './entities/player';
 import { ZombieManager } from './entities/zombieManager';
 import type { Zombie } from './entities/zombie';
 import { ZombieRenderer } from './render/zombieRenderer';
+import { EXPLODER, type ZombieKind } from './entities/zombie';
 import { ZombieAI, AI as AI_CFG, type AttackResult } from './ai/zombieAI';
 import { ARENA } from './config';
-import { WaveDirector, type WaveEvent } from './systems/waves';
+import { WaveDirector, WEAPON_UNLOCKS, type WaveEvent } from './systems/waves';
 import { Pickups, LOOT, type PickupKind } from './systems/pickups';
 import { Group, groups, ALL, PhysicsWorld, MATERIAL_COST, type RayHit } from './physics/physicsWorld';
 import { BulletViews, type BulletVisual } from './render/bulletViews';
-import type { WeaponDef } from './weapons/weapon';
+import { WeaponVfx, TRACER_STYLES } from './render/weaponVfx';
+import { WEAPONS, type WeaponDef } from './weapons/weapon';
+import { rollUpgrades, type Upgrade } from './systems/upgrades';
 import { Renderer } from './render/renderer';
 import { HumanoidRig, SURVIVOR_LOOK } from './render/humanoidRig';
-import { BulletHoles, MuzzleFlash, ParticleSystem } from './render/effects';
-import { buildArena, spawnBarrel, type DynamicProp } from './world/arena';
+import { Flashlight } from './render/flashlight';
+import { BulletHoles, MuzzleFlash, ParticleSystem, PulseLight } from './render/effects';
+import { buildArena, spawnBarrel, FIRES, FLICKER_LAMP, type DynamicProp } from './world/arena';
 import { Hud } from './ui/hud';
 import { DebugOverlay } from './ui/debugOverlay';
 import type { WeaponEvent } from './weapons/weapon';
 import { AimModel } from './weapons/aimModel';
+import { GRENADE, throwVelocity, spawnGrenade, stepGrenade, hitZombie, flightTime, type Grenade } from './weapons/grenade';
 import { settings } from './core/settings';
 
 /** Bullets travel horizontally at this height (zombie chest, crate/barrel tops are 1.2 m). */
@@ -34,12 +39,17 @@ const BULLET_HEIGHT = 1.15;
 const AIM_LINE_LENGTH = 6;
 const v3 = new THREE.Vector3();
 const v3b = new THREE.Vector3();
+const m4 = new THREE.Matrix4();
+/** Dots in the grenade arc preview. */
+const ARC_DOTS = 22;
 
 /** A bullet in flight (simulation). */
 interface Bullet extends BulletVisual { def: WeaponDef; power: number; skip: Set<number> }
 
 /** Player damage at the centre of a barrel blast (falls off to 0 at the edge). */
 const EXPLOSION_PLAYER_DAMAGE = 70;
+/** Explosive barrel blast radius (m). */
+const BARREL_BLAST_RADIUS = 5;
 
 const BEST_KEY = 'sectorz.best';
 function loadBest(): { wave: number; kills: number } {
@@ -66,6 +76,20 @@ export class Game {
   private readonly ghostLine: THREE.Mesh;
   private readonly cone: THREE.Mesh;
   private readonly marker: THREE.Mesh;
+  /** Red ground warnings under burning barrels: blast-radius ring + a fill that grows until the boom. */
+  private readonly dangerZones: THREE.Mesh[] = [];
+  private readonly dangerRingGeo = new THREE.RingGeometry(0.95, 1, 48).rotateX(-Math.PI / 2);
+  private readonly dangerFillGeo = new THREE.CircleGeometry(1, 48).rotateX(-Math.PI / 2);
+  private readonly dangerRingMat = new THREE.MeshBasicMaterial({ color: 0xff3020, transparent: true, opacity: 0.8, depthWrite: false, toneMapped: false });
+  private readonly dangerFillMat = new THREE.MeshBasicMaterial({ color: 0xff3020, transparent: true, opacity: 0.18, depthWrite: false, toneMapped: false });
+  /** Grenade throw preview: dotted arc + blast-radius ring at the landing point. */
+  private readonly arcDots: THREE.InstancedMesh;
+  private readonly blastRing: THREE.Mesh;
+  private readonly grenadeMeshes: THREE.Mesh[] = [];
+  private readonly grenadeGeo = new THREE.BoxGeometry(GRENADE.half * 2, GRENADE.half * 2.6, GRENADE.half * 2);
+  private readonly grenadeMat = new THREE.MeshLambertMaterial({ color: 0x4a5a32 });
+  private readonly grenadeLightGeo = new THREE.BoxGeometry(0.06, 0.04, 0.06).translate(0, GRENADE.half * 1.3 + 0.02, 0);
+  private readonly grenadeLightMat = new THREE.MeshBasicMaterial({ color: 0xff2a1a, toneMapped: false });
   /** Whether the aim line is currently shown (exposed to tests). */
   aimLineVisible = false;
   readonly debug = new DebugOverlay();
@@ -84,13 +108,35 @@ export class Game {
   private visYaw = 0;
   private time = 0;
   private readonly weaponEvents: WeaponEvent[] = [];
-  readonly stats = { shots: 0, hits: 0, ticks: 0, maxImpactSpeed: 0, penetrations: 0, activeReloads: 0, zombieHits: 0, kills: 0, dismembers: 0, damageTaken: 0, wave: 0, barrels: 0 };
+  /** Grenade blast radius multiplier (DEMOLITION upgrade). */
+  grenadeRadiusMul = 1;
+  /** Upgrades taken this run (id → times). */
+  readonly upgradesTaken = new Map<string, number>();
+  /** Cards on offer during the break (null = none); the break countdown waits for a pick. */
+  upgradeChoices: Upgrade[] | null = null;
+  /** Live grenades (simulation). */
+  readonly grenades: Grenade[] = [];
+  private grenadeMode = false;
+  private throwX = 0; private throwZ = 0;
+  private grenadeWanted = false; // armed last tick (for the "no grenades" toast edge)
+  readonly stats = { exploderBlasts: 0, grenadesThrown: 0, grenadeBlasts: 0, shots: 0, hits: 0, ticks: 0, maxImpactSpeed: 0, penetrations: 0, activeReloads: 0, zombieHits: 0, kills: 0, dismembers: 0, damageTaken: 0, wave: 0, barrels: 0 };
   private readonly bullets: Bullet[] = [];
   private readonly bulletViews: BulletViews;
+  private readonly vfx: WeaponVfx;
+  private readonly flashlight: Flashlight;
   private readonly holes: BulletHoles;
   private readonly blood: BulletHoles;
   private readonly impacts: import('./entities/zombieManager').ImpactResult[] = [];
   private thudCooldown = 0;
+  private fireT = 0; // flame emission accumulator (burning wreck)
+  // Horror audio state: per-zombie growl/step timers and attack edge, global pacing.
+  private readonly voices = new WeakMap<Zombie, { growl: number; step: number; attacking: boolean }>();
+  private growlGap = 0;
+  private moanT = 6;
+  private beatT = 0;
+  /** Explosion flash (one pooled light) and the burning wreck's flickering firelight. */
+  private readonly blastLight: PulseLight;
+  private readonly fireLight: THREE.PointLight;
   private readonly hitMarker = document.getElementById('hitmarker')!;
   private hitMarkerT = 0;
   private readonly retMat: THREE.MeshBasicMaterial;
@@ -110,12 +156,13 @@ export class Game {
   private deathShown = false;
   lab = false;
 
-  constructor(container: HTMLElement, touchLayer: HTMLElement, reloadBtn: HTMLElement, switchBtn: HTMLElement, readonly quality: QualityPreset) {
+  constructor(container: HTMLElement, touchLayer: HTMLElement, reloadBtn: HTMLElement, switchBtn: HTMLElement, grenadeBtn: HTMLElement,
+    readonly quality: QualityPreset) {
     this.zombies = new ZombieManager(this.physics, quality.name === 'mobile'
       ? { maxRagdolls: 6, maxLooseLimbs: 24, maxCorpses: 16, corpseLife: 60 }
       : { maxRagdolls: 12, maxLooseLimbs: 48, maxCorpses: 32, corpseLife: 90 });
     this.renderer = new Renderer(container, quality);
-    this.input = new InputManager(touchLayer, reloadBtn, switchBtn);
+    this.input = new InputManager(touchLayer, reloadBtn, switchBtn, grenadeBtn);
     const scene = this.renderer.scene;
 
     this.props = buildArena(scene, this.physics);
@@ -126,6 +173,9 @@ export class Game {
     void ({} as Zombie);
     for (const p of this.props) { const t = p.body.translation(); this.propStart.set(p, new THREE.Vector3(t.x, t.y, t.z)); }
     this.player = new Player(1, this.physics, 0, 2);
+    // The player holds the flashlight: their own arm/gun right in front of it would throw a huge
+    // blocky shadow into the beam, so the player model casts no shadows (props and zombies still do).
+    this.rig.root.traverse((o) => { o.castShadow = false; });
     scene.add(this.rig.root);
 
     this.sparks = new ParticleSystem(quality.maxSparks, { emissive: true });
@@ -133,6 +183,12 @@ export class Game {
     this.flash = new MuzzleFlash(scene);
     this.holes = new BulletHoles(scene);
     this.bulletViews = new BulletViews(scene);
+    this.vfx = new WeaponVfx(scene, this.sparks);
+    this.flashlight = new Flashlight(scene, quality, this.physics);
+    this.blastLight = new PulseLight(scene, 0xffa04a, 20);
+    this.fireLight = new THREE.PointLight(0xff8a3a, 0, 11, 1.4);
+    this.fireLight.position.set(FIRES[0][0], FIRES[0][1] + 1, FIRES[0][2]);
+    scene.add(this.fireLight);
     this.blood = new BulletHoles(scene, quality.name === 'mobile' ? 40 : 80, 0x5c070a, 0.32, 30, 0.8);
     scene.add(this.sparks.mesh, this.debris.mesh);
 
@@ -168,6 +224,14 @@ export class Game {
       new THREE.MeshBasicMaterial({ color: 0x8fe0ff, transparent: true, opacity: 0.45, depthWrite: false }));
     this.marker.position.y = 0.02;
     scene.add(this.aimLine, this.marker);
+    this.arcDots = new THREE.InstancedMesh(new THREE.SphereGeometry(0.05, 6, 4),
+      new THREE.MeshBasicMaterial({ color: 0xffe08a, transparent: true, opacity: 0.85, depthWrite: false, toneMapped: false }), ARC_DOTS);
+    this.arcDots.frustumCulled = false;
+    this.blastRing = new THREE.Mesh(new THREE.RingGeometry(0.94, 1, 48).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: 0xffb347, transparent: true, opacity: 0.55, depthWrite: false, toneMapped: false }));
+    this.blastRing.add(new THREE.Mesh(new THREE.CircleGeometry(0.06, 16).rotateX(-Math.PI / 2), this.blastRing.material));
+    this.arcDots.visible = this.blastRing.visible = false;
+    scene.add(this.arcDots, this.blastRing);
 
     this.wireEffects();
     this.renderer.snapCamera(this.player.x, this.player.z);
@@ -177,6 +241,7 @@ export class Game {
   }
 
   start(): void {
+    this.resetUnlocks();
     this.sfx.unlock();
     this.loop.start();
   }
@@ -192,7 +257,8 @@ export class Game {
     const automatic = this.player.weapon.def.automatic;
     this.stickAim = !!raw.aimStick;
     this.stickFiring = raw.stickFiring;
-    if (raw.stickActive) {
+    const grenade = raw.grenadeArmed || raw.grenadeThrow;
+    if (raw.stickActive && !grenade) {
       // Touch: dragging aims; a tap (or the start of a hold) fires once; holding keeps
       // automatic weapons firing. The aim line shows while a thumb is down.
       if (raw.aimStick) {
@@ -215,6 +281,39 @@ export class Game {
     if (raw.stickTap) out.triggerTap = true;
     out.reload = raw.reload;
     out.switchWeapon = raw.switchWeapon;
+    this.resolveGrenade(raw, out, grenade);
+  }
+
+  /** Grenade aiming: target from the touch stick (push further = throw further) or the mouse cursor. */
+  private resolveGrenade(raw: RawInput, out: InputCommand, wanted: boolean): void {
+    out.grenadeMode = out.throwGrenade = false;
+    out.throwX = out.throwZ = 0;
+    const edge = wanted && !this.grenadeWanted;
+    this.grenadeWanted = wanted;
+    if (!wanted) return;
+    if (this.player.grenades <= 0) {
+      this.input.touch.setArmed(false);
+      if (edge) this.hud.toast('NO GRENADES');
+      return;
+    }
+    out.grenadeMode = true;
+    out.aiming = out.trigger = out.triggerTap = false;
+    this.stickAim = this.stickFiring = false;
+    const { minRange, maxRange } = GRENADE;
+    if (raw.grenadeStick) {
+      const sgn = settings.aimReverse ? -1 : 1, st = raw.grenadeStick;
+      const d = minRange + (maxRange - minRange) * st.mag;
+      out.throwX = st.x * sgn * d; out.throwZ = st.y * sgn * d;
+    } else if (raw.aimScreen && this.renderer.screenToGround(raw.aimScreen.x, raw.aimScreen.y, 0, v3)) {
+      const dx = v3.x - this.player.x, dz = v3.z - this.player.z, l = Math.hypot(dx, dz);
+      if (l > 0.01) {
+        const d = Math.min(maxRange, Math.max(minRange, l));
+        out.throwX = (dx / l) * d; out.throwZ = (dz / l) * d;
+      }
+    }
+    const has = out.throwX !== 0 || out.throwZ !== 0;
+    if (has) { const l = Math.hypot(out.throwX, out.throwZ); out.aimX = out.throwX / l; out.aimZ = out.throwZ / l; }
+    out.throwGrenade = raw.grenadeThrow && has;
   }
 
   private step(dt: number): void {
@@ -245,6 +344,8 @@ export class Game {
     if (turning || cmd.aimX !== 0 || cmd.aimZ !== 0) { cmd.aimX = this.aim.x; cmd.aimZ = this.aim.z; }
     this.aimX = this.aim.x; this.aimZ = this.aim.z;
     this.aiming = cmd.aiming;
+    this.grenadeMode = cmd.grenadeMode;
+    this.throwX = cmd.throwX; this.throwZ = cmd.throwZ;
 
     // Zombies around the player slow them down (wading through a crowd) instead of blocking.
     // Future special zombies can pin the player by forcing slowMul to 0.
@@ -277,8 +378,11 @@ export class Game {
       else if (e === 'reloadFumble') this.events.emit('activeReload', { weapon: w, success: false });
       else if (e === 'shellIn') this.sfx.shellIn();
     }
+    if (cmd.throwGrenade) this.throwGrenade(cmd.throwX, cmd.throwZ);
     this.stepBullets(dt);
     this.updateFuses(dt);
+    this.updateExploders(dt);
+    this.updateGrenades(dt);
     this.physics.step();
     // Environmental impacts: bodies slammed into the world take damage; thuds for sound.
     this.zombies.processImpacts(this.physics.contactForces, dt, this.impacts);
@@ -303,13 +407,13 @@ export class Game {
       // Gaussian-ish spread (sum of two uniforms): most shots near the centre, few at the edge.
       const a = this.aim.angle + ((Math.random() + Math.random()) - 1) * spread;
       // Subtle vertical scatter, biased low (some shots catch legs instead of always the chest).
-      const pitch = -Math.random() * def.vSpread + Math.random() * def.vSpread * 0.25;
+      const pitch = -Math.random() * def.vSpread + Math.random() * def.vSpread * 0.25 + this.aim.pitch;
       const c = Math.cos(pitch);
       const dx = Math.sin(a) * c, dy = Math.sin(pitch), dz = Math.cos(a) * c;
       this.stats.shots++;
       this.bullets.push({
         x: p.x, y: BULLET_HEIGHT, z: p.z, px: p.x, py: BULLET_HEIGHT, pz: p.z, ox: p.x, oy: BULLET_HEIGHT, oz: p.z, dx, dy, dz,
-        travelled: 0, width: def.traceWidth, length: def.traceLength, def, power: def.penetration, skip: new Set<number>(),
+        travelled: 0, width: def.traceWidth, length: def.traceLength, style: TRACER_STYLES[def.id], seed: Math.random(), def, power: def.penetration, skip: new Set<number>(),
       });
     }
     // Once per trigger pull (not per pellet): muzzle FX/sound, and recoil shoving the shooter back.
@@ -354,8 +458,13 @@ export class Game {
     const falloff = b.travelled <= def.falloffStart ? 1 : Math.max(0.25, 1 - 0.75 * (b.travelled - def.falloffStart) / Math.max(1, def.range - def.falloffStart));
     const power = Math.min(1, b.power / def.penetration + 0.3) * falloff;
     const force = def.impulse * (penetrated ? 0.55 : 1) * power;
+    // Point-blank shotgun: pellets hit zombies much harder (limbs tear off, bodies are blown back).
+    const cb = def.closeBoost;
+    const close = cb && material === 'flesh'
+      ? 1 + (cb.mul - 1) * Math.min(1, Math.max(0, (cb.fade - b.travelled) / (cb.fade - cb.range))) : 1;
+    const zf = force * close;
     const zr = material === 'flesh'
-      ? this.zombies.hit(hit.collider, def.damage * power, b.dx * force, force * 0.25, b.dz * force, ex, ey, ez, SIM_DT, def.limbMult, def.flinch)
+      ? this.zombies.hit(hit.collider, def.damage * power, b.dx * zf, zf * 0.25, b.dz * zf, ex, ey, ez, SIM_DT, def.limbMult, def.flinch)
       : null;
     const dynamic = !!zr || (!!body && body.isDynamic());
     if (zr) {
@@ -374,7 +483,7 @@ export class Game {
       const v = body!.linvel();
       this.stats.maxImpactSpeed = Math.max(this.stats.maxImpactSpeed, Math.hypot(v.x, v.y, v.z));
     }
-    this.events.emit('hit', { x: ex, y: ey, z: ez, nx: hit.normal.x, ny: hit.normal.y, nz: hit.normal.z, dynamic, material, penetrated });
+    this.events.emit('hit', { x: ex, y: ey, z: ez, nx: hit.normal.x, ny: hit.normal.y, nz: hit.normal.z, dynamic, material, penetrated, weapon: def.id });
     if (!penetrated) return false;
     this.stats.penetrations++;
     b.power -= cost;
@@ -423,6 +532,113 @@ export class Game {
     this.retMat.color.setRGB(1, 0.35 + 0.65 * this.aim.steady, 0.24 + 0.76 * this.aim.steady);
   }
 
+  /** Barrel about to blow: ring at the blast radius, inner fill grows with the fuse (0..1). */
+  private showDangerZone(i: number, x: number, z: number, progress: number, radius = BARREL_BLAST_RADIUS): void {
+    let ring = this.dangerZones[i];
+    if (!ring) {
+      ring = new THREE.Mesh(this.dangerRingGeo, this.dangerRingMat);
+      ring.add(new THREE.Mesh(this.dangerFillGeo, this.dangerFillMat));
+      ring.renderOrder = 1;
+      this.renderer.scene.add(ring);
+      this.dangerZones.push(ring);
+    }
+    ring.visible = true;
+    ring.position.set(x, 0.025, z);
+    ring.scale.setScalar(radius);
+    ring.children[0].scale.setScalar(Math.max(0.05, Math.min(1, progress)));
+    // Pulse faster as the fuse runs out.
+    this.dangerRingMat.opacity = 0.55 + 0.4 * Math.abs(Math.sin(this.time * (6 + 14 * progress)));
+  }
+
+  /**
+   * Horror soundscape: zombies growl (louder closer, panned to their side), snarl when they start
+   * a swing (the cue to dodge in the dark), the nearest shuffle audibly; distant moans, wind,
+   * and a heartbeat at low health.
+   */
+  private updateAudio(dt: number): void {
+    const p = this.player, sfx = this.sfx;
+    sfx.startAmbience();
+    this.growlGap -= dt;
+    const near: [number, Zombie][] = [];
+    for (const z of this.zombies.zombies) {
+      if (z.state === 'dead') continue;
+      let v = this.voices.get(z);
+      if (!v) { v = { growl: 1 + Math.random() * 4, step: Math.random(), attacking: false }; this.voices.set(z, v); }
+      const dx = z.x - p.x, dz = z.z - p.z, d = Math.hypot(dx, dz);
+      const vol = Math.pow(Math.max(0, 1 - d / 16), 1.5), pan = Math.max(-0.9, Math.min(0.9, dx / 9));
+      const attacking = z.attackPose > 0;
+      if (attacking && !v.attacking) sfx.snarl(Math.max(0.35, vol), pan);
+      v.attacking = attacking;
+      v.growl -= dt;
+      if (v.growl <= 0 && d < 16) {
+        if (this.growlGap <= 0) { sfx.growl(z.kind, vol, pan); this.growlGap = 0.3; }
+        v.growl = z.kind === 'runner' ? 1.5 + Math.random() * 2.5 : 3 + Math.random() * 5;
+      }
+      if (z.speed > 0.3 && d < 7) near.push([d, z]);
+    }
+    // Footsteps: only the two nearest walkers (a crowd would be mush), one step per ~0.7 m.
+    near.sort((a, b) => a[0] - b[0]);
+    for (let i = 0; i < Math.min(2, near.length); i++) {
+      const [d, z] = near[i], v = this.voices.get(z)!;
+      v.step -= dt * z.speed / 0.7;
+      if (v.step <= 0) {
+        v.step = 1;
+        sfx.step(Math.pow(1 - d / 7, 1.3), Math.max(-0.9, Math.min(0.9, (z.x - p.x) / 9)), z.kind === 'brute');
+      }
+    }
+    this.moanT -= dt;
+    if (this.moanT <= 0) { sfx.distantMoan(Math.random() * 1.6 - 0.8); this.moanT = 9 + Math.random() * 10; }
+    // Heartbeat below 35% health: faster and louder the lower it gets.
+    const h = p.health / p.maxHealth;
+    if (p.alive && h < 0.35) {
+      this.beatT -= dt;
+      if (this.beatT <= 0) { sfx.heartbeat(0.6 + (0.35 - h)); this.beatT = 0.45 + h * 1.6; }
+    } else this.beatT = 0;
+  }
+
+  /** Burning wreck: rising flame cubes, a few embers and dark smoke (rate-based, frame-rate independent). */
+  private updateFires(dt: number): void {
+    this.fireT += dt * 45;
+    while (this.fireT >= 1) {
+      this.fireT -= 1;
+      for (const [fx, fy, fz] of FIRES) {
+        const x = fx + (Math.random() - 0.5) * 1.4, z = fz + (Math.random() - 0.5) * 0.9;
+        this.sparks.emit(x, fy + Math.random() * 0.2, z, (Math.random() - 0.5) * 0.4, 1.4 + Math.random() * 1.2, (Math.random() - 0.5) * 0.4,
+          0.1 + Math.random() * 0.12, 0.35 + Math.random() * 0.3, Math.random() < 0.4 ? 0xffd04a : Math.random() < 0.6 ? 0xff8a2a : 0xe8441c, 0, -3, 1.5, 3);
+        if (Math.random() < 0.1) this.sparks.emit(x, fy + 0.4, z, (Math.random() - 0.5) * 1.5, 2.5 + Math.random() * 2, (Math.random() - 0.5) * 1.5,
+          0.03, 0.8 + Math.random() * 0.6, 0xffb347, 0.2, 1.5, 0.8, 6);
+        if (Math.random() < 0.15) this.debris.emit(x, fy + 0.8, z, (Math.random() - 0.5) * 0.3, 0.8 + Math.random() * 0.4, (Math.random() - 0.5) * 0.3,
+          0.25 + Math.random() * 0.2, 1.6 + Math.random() * 0.8, Math.random() < 0.5 ? 0x2b2b2d : 0x3a3a3c, 0, -0.6, 0.6, 1);
+      }
+    }
+  }
+
+  /** Grenade throw preview: the same ballistic path the throw will take, cut at the first obstacle. */
+  private updateGrenadeArc(px: number, pz: number): void {
+    const show = this.grenadeMode && (this.throwX !== 0 || this.throwZ !== 0) && this.player.alive;
+    this.arcDots.visible = this.blastRing.visible = show;
+    if (!show) return;
+    const l = Math.hypot(this.throwX, this.throwZ), ux = this.throwX / l, uz = this.throwZ / l;
+    const y0 = GRENADE.releaseHeight, x0 = px + ux * 0.5, z0 = pz + uz * 0.5;
+    const v = throwVelocity(px + this.throwX - x0, pz + this.throwZ - z0, y0);
+    const T = flightTime(l - 0.5), filter = groups(Group.PLAYER, Group.STATIC | Group.PROP);
+    let lx = x0, ly = y0, lz = z0, end = { x: px + this.throwX, z: pz + this.throwZ }, n = 0;
+    const steps = ARC_DOTS * 2;
+    for (let i = 1; i <= steps; i++) {
+      const t = (i / steps) * T;
+      const x = x0 + v.x * t, y = y0 + v.y * t - 4.905 * t * t, z = z0 + v.z * t;
+      const dx = x - lx, dy = y - ly, dz = z - lz, sl = Math.hypot(dx, dy, dz);
+      const hit = this.physics.raycast(lx, ly, lz, dx / sl, dy / sl, dz / sl, sl, filter, this.player.collider);
+      if (hit) { end = { x: hit.point.x, z: hit.point.z }; break; }
+      if (i % 2 === 0 && n < ARC_DOTS) this.arcDots.setMatrixAt(n++, m4.makeTranslation(x, y, z));
+      lx = x; ly = y; lz = z;
+    }
+    this.arcDots.count = n;
+    this.arcDots.instanceMatrix.needsUpdate = true;
+    this.blastRing.position.set(end.x, 0.03, end.z);
+    this.blastRing.scale.setScalar(GRENADE.radius * this.grenadeRadiusMul * (1 + 0.02 * Math.sin(this.time * 8)));
+  }
+
   private wireEffects(): void {
     const ev = this.events;
     ev.on('shot', (e) => {
@@ -430,13 +646,15 @@ export class Game {
       this.rig.muzzle.getWorldPosition(v3);
       // SMG: every 3rd round blooms a bigger flash so sustained fire flickers like a real muzzle.
       const big = def.automatic && this.stats.shots % 3 === 0;
-      this.flash.fire(v3, this.visYaw, def.automatic ? (big ? 1.6 : 0.8) : 1);
+      const style = TRACER_STYLES[def.id];
+      this.flash.fire(v3, this.visYaw, def.automatic ? (big ? 1.6 : 0.8) : 1, !style);
+      if (style) this.vfx.muzzleFlash(style, v3.x, v3.y, v3.z, e.dx, e.dz, def.automatic ? (big ? 1.25 : 0.85) : 1);
       this.recoil = Math.min(1, this.recoil + def.recoil);
       this.renderer.addShake(def.shake);
       if (def.id === 'smg') this.sfx.smgShot(); else if (def.id === 'shotgun') { this.sfx.shotgun(); this.sfx.pump(0.3); } else this.sfx.gunshot();
       if (def.casingSound) this.sfx.casing();
-      // Muzzle smoke: slow grey puffs drifting up.
-      for (let i = 0; i < (def.automatic ? 1 : 3); i++) {
+      // Muzzle smoke: slow grey puffs drifting up (styled weapons make their own in vfx.muzzleFlash).
+      for (let i = 0; i < (style ? 0 : def.automatic ? 1 : 3); i++) {
         this.debris.emit(v3.x + e.dx * 0.1, v3.y, v3.z + e.dz * 0.1,
           e.dx * 0.8 + (Math.random() - 0.5) * 0.4, 0.4 + Math.random() * 0.3, e.dz * 0.8 + (Math.random() - 0.5) * 0.4,
           0.1 + Math.random() * 0.08, 0.7 + Math.random() * 0.4, 0x8b8f94, 0, -0.6, 2.5, 2);
@@ -450,7 +668,9 @@ export class Game {
     ev.on('hit', (e) => {
       const m = e.material;
       // Brief bright flash where the bullet lands (cosmetic only).
-      this.sparks.emit(e.x, e.y, e.z, 0, 0, 0, 0.16, 0.06, m === 'flesh' ? 0xff6a50 : 0xfff0b0, 0, 0, 0, 0);
+      const st = e.weapon ? TRACER_STYLES[e.weapon] : undefined;
+      if (st) this.vfx.impactFlash(st, e.x, e.y, e.z, e.nx, e.ny, e.nz, m === 'flesh');
+      else this.sparks.emit(e.x, e.y, e.z, 0, 0, 0, 0.16, 0.06, m === 'flesh' ? 0xff6a50 : 0xfff0b0, 0, 0, 0, 0);
       // Sparks: lots on metal, a few on concrete, none on wood (splinters instead).
       const sparks = m === 'metal' ? 12 : m === 'concrete' ? 5 : 0;
       for (let i = 0; i < sparks; i++) {
@@ -541,6 +761,7 @@ export class Game {
           0.06 + Math.random() * 0.1, 2, 0x6e6b66, 0.3, 14, 0.5);
       }
       this.holes.add(e.x, 0.005, e.z, 0, 1, 0); // scorch mark
+      this.blastLight.fire(e.x, 1.5, e.z, 600, 0.45); // the blast lights up the night
     });
     ev.on('activeReload', (e) => this.sfx.activeReload(e.success));
     ev.on('dryFire', () => this.sfx.dry());
@@ -567,17 +788,43 @@ export class Game {
 
     this.marker.position.x = x; this.marker.position.z = z;
     this.updateAimLine(x, z);
+    this.flashlight.update(x, z, this.visYaw, frameDt, p.alive);
+    this.updateGrenadeArc(x, z);
+    for (let i = 0; i < this.grenades.length; i++) {
+      const g = this.grenades[i], m = this.grenadeMeshes[i];
+      const t = g.body.translation(), r = g.body.rotation();
+      m.position.set(t.x, t.y, t.z);
+      m.quaternion.set(r.x, r.y, r.z, r.w);
+      // Fuse light blinks faster as it runs down.
+      m.children[0].visible = Math.sin(this.time * (g.fuse < 0.6 ? 50 : 16)) > 0;
+    }
 
     this.syncZombieViews(frameDt);
 
+    let warn = 0;
     for (const prop of this.props) {
       const t = prop.body.translation(), r = prop.body.rotation();
       prop.mesh.position.set(t.x, t.y, t.z);
       prop.mesh.quaternion.set(r.x, r.y, r.z, r.w);
+      if (prop.fuse !== undefined) this.showDangerZone(warn++, t.x, t.z, 1 - prop.fuse / (prop.fuseTotal || 1));
     }
+    for (const zb of this.zombies.zombies) {
+      if (zb.fuse === undefined || zb.exploded) continue;
+      const t = zb.parts[1].body.translation();
+      this.showDangerZone(warn++, t.x, t.z, 1 - Math.max(0, zb.fuse) / zb.fuseTotal, EXPLODER.radius);
+    }
+    for (let i = warn; i < this.dangerZones.length; i++) this.dangerZones[i].visible = false;
 
+    this.updateFires(frameDt);
+    this.updateAudio(frameDt);
+    // Firelight flicker: layered sines + a little noise.
+    this.fireLight.intensity = 22 * (0.75 + 0.15 * Math.sin(this.time * 11) + 0.1 * Math.sin(this.time * 23.7) + Math.random() * 0.12);
+    this.blastLight.update(frameDt);
+    // The last working lamp: mostly on, with nervous dropouts.
+    FLICKER_LAMP.emissiveIntensity = Math.sin(this.time * 0.7) > 0.6 && Math.random() < 0.35 ? 0.05 : 0.9 + Math.random() * 0.1;
     this.flash.update(frameDt);
     this.bulletViews.update(this.bullets, alpha);
+    this.vfx.update(this.bullets, alpha, frameDt);
     this.holes.update(frameDt);
     this.blood.update(frameDt);
     if (this.hitMarkerT > 0) { this.hitMarkerT -= frameDt; if (this.hitMarkerT <= 0) this.hitMarker.classList.remove('on'); }
@@ -586,8 +833,8 @@ export class Game {
     this.renderer.updateCamera(x, z, this.aimX, this.aimZ, frameDt);
     this.renderer.render();
 
-    this.hud.update(p.weapon, p.health, PLAYER.maxHealth);
-    if (this.survival && !this.lab) this.hud.wave(this.waves.state, this.waves.wave, this.waves.remaining(this.zombies.aliveCount), this.waves.timer);
+    this.hud.update(p.weapon, p.health, p.maxHealth, p.grenades);
+    if (this.survival && !this.lab) this.hud.wave(this.waves.state, this.waves.wave, this.waves.remaining(this.zombies.aliveCount), this.waves.timer, !!this.upgradeChoices);
     this.debug.update(frameDt, this.renderer.renderer, {
       physicsMs: this.physics.lastStepMs,
       ragdolls: this.zombies.ragdollCount,
@@ -649,11 +896,21 @@ export class Game {
   restart(): void {
     this.zombies.clear();
     const p = this.player;
-    p.health = PLAYER.maxHealth;
+    // Per-run stats back to base (upgrades are per run).
+    for (const w of p.weapons) w.def = WEAPONS[w.def.id as keyof typeof WEAPONS];
+    p.maxHealth = PLAYER.maxHealth; p.speedMul = 1; p.grenadeMax = GRENADE.max;
+    this.grenadeRadiusMul = 1;
+    this.upgradesTaken.clear();
+    this.upgradeChoices = null;
+    this.hud.hideUpgrades();
+    p.health = p.maxHealth;
     p.body.setNextKinematicTranslation({ x: 0, y: p.body.translation().y, z: 2 });
     p.x = p.prevX = 0; p.z = p.prevZ = 2; p.vx = p.vz = 0;
     for (const w of p.weapons) { w.ammo = w.def.magSize; w.cancelReload(); }
     for (const w of p.weapons) w.reserve = w.def.reserveStart;
+    p.grenades = GRENADE.start;
+    this.resetUnlocks();
+    for (let i = this.grenades.length - 1; i >= 0; i--) this.removeGrenade(i);
     this.stats.kills = 0; this.stats.dismembers = 0; this.stats.wave = 0;
     this.deathShown = false;
     this.deadEl.classList.remove('on');
@@ -666,12 +923,66 @@ export class Game {
   private runWaves(dt: number): void {
     if (!this.player.alive) return;
     const max = this.quality.name === 'mobile' ? 8 : 12;
+    // While upgrade cards are up, the break waits for a pick.
+    if (this.upgradeChoices && this.waves.state === 'break') return;
     const n = this.waves.update(dt, this.zombies.aliveCount, max, this.waveEvents);
     for (const e of this.waveEvents) {
-      if (e.type === 'waveStart') { this.hud.banner(`WAVE ${e.wave}`, `${e.count} zombies`); this.sfx.waveStart(); }
-      else { this.hud.banner(`WAVE ${e.wave} CLEARED`, 'catch your breath'); this.sfx.waveClear(); this.stats.wave = e.wave; this.restockBarrels(); }
+      if (e.type === 'waveStart') {
+        const unlocked = this.unlockWeapons(e.wave);
+        this.hud.banner(`WAVE ${e.wave}`, unlocked ? `${unlocked.toUpperCase()} UNLOCKED · ${e.count} zombies` : `${e.count} zombies`);
+        this.sfx.waveStart();
+        if (unlocked) this.sfx.pickup();
+      }
+      else { this.hud.banner(`WAVE ${e.wave} CLEARED`, 'catch your breath'); this.sfx.waveClear(); this.stats.wave = e.wave; this.restockBarrels(); this.giveGrenade(); this.offerUpgrades(); }
     }
     for (let i = 0; i < n; i++) this.spawnWaveZombie();
+  }
+
+  /** Survival starts with the pistol only (Lab / ?nozombies keep every weapon). */
+  private resetUnlocks(): void {
+    const p = this.player;
+    p.unlocked = this.survival && !this.lab ? 1 : p.weapons.length;
+    if (p.weaponIndex >= p.unlocked) p.switchWeapon(0);
+    this.hud.weaponsUnlocked(p.unlocked);
+  }
+
+  /** Unlock weapons whose wave has come. Returns the name of a newly unlocked weapon, if any. */
+  private unlockWeapons(wave: number): string | null {
+    const p = this.player;
+    let name: string | null = null;
+    for (const u of WEAPON_UNLOCKS) {
+      if (wave >= u.wave && p.unlocked <= u.slot) { p.unlocked = u.slot + 1; name = p.weapons[u.slot].def.name; }
+    }
+    if (name) this.hud.weaponsUnlocked(p.unlocked);
+    return name;
+  }
+
+  /** Between waves: show 3 upgrade cards. */
+  private offerUpgrades(): void {
+    const list = rollUpgrades(this, this.upgradesTaken);
+    if (!list.length) return;
+    this.upgradeChoices = list;
+    this.hud.showUpgrades(list, (i) => this.pickUpgrade(i));
+  }
+
+  /** Take card i (UI tap/click, or tests). */
+  pickUpgrade(i: number): void {
+    const u = this.upgradeChoices?.[i];
+    if (!u) return;
+    u.apply(this);
+    this.upgradesTaken.set(u.id, (this.upgradesTaken.get(u.id) ?? 0) + 1);
+    this.upgradeChoices = null;
+    this.hud.hideUpgrades();
+    this.hud.toast(u.name);
+    this.sfx.pickup();
+  }
+
+  /** Clearing a wave earns a grenade (up to the carry limit). */
+  private giveGrenade(): void {
+    const p = this.player;
+    if (p.grenades >= p.grenadeMax) return;
+    p.grenades++;
+    this.hud.toast('+1 GRENADE');
   }
 
   private spawnWaveZombie(): void {
@@ -679,9 +990,11 @@ export class Game {
     for (let tries = 0; tries < 30; tries++) {
       const x = (Math.random() - 0.5) * (ARENA.size - 4), z = (Math.random() - 0.5) * (ARENA.size - 4);
       if (Math.hypot(x - p.x, z - p.z) < 12 || this.ai.nav.isBlocked(x, z)) continue;
-      const zb = this.zombies.spawn(x, z, Math.atan2(p.x - x, p.z - z));
+      const kind = this.waves.nextKind;
+      const zb = this.zombies.spawn(x, z, Math.atan2(p.x - x, p.z - z), kind);
       zb.baseSpeed *= tune.speedMul;
       zb.hp *= tune.hpMul;
+      zb.maxHp = zb.hp;
       this.ai.alertAll([zb]);
       return;
     }
@@ -690,9 +1003,13 @@ export class Game {
   /** Walked over loot. Returns false if it's of no use right now (stays on the ground). */
   private takePickup(k: PickupKind): boolean {
     const p = this.player;
-    if (k === 'health') {
-      if (p.health >= PLAYER.maxHealth) return false;
-      p.health = Math.min(PLAYER.maxHealth, p.health + LOOT.healthAmount);
+    if (k === 'grenade') {
+      if (p.grenades >= p.grenadeMax) return false;
+      p.grenades++;
+      this.hud.toast('+1 GRENADE');
+    } else if (k === 'health') {
+      if (p.health >= p.maxHealth) return false;
+      p.health = Math.min(p.maxHealth, p.health + LOOT.healthAmount);
       this.hud.toast(`+${LOOT.healthAmount} HEALTH`);
     } else {
       // An ammo box tops up the SMG and gives a few shotgun shells.
@@ -704,13 +1021,14 @@ export class Game {
     return true;
   }
 
-  /** Spawn a ring of test zombies in front of the player (Ragdoll Lab). */
-  spawnZombies(n = 5): void {
+  /** Spawn a ring of test zombies in front of the player (Ragdoll Lab); 'mix' = one of each type. */
+  spawnZombies(n = 5, kind: ZombieKind | 'mix' = 'walker'): void {
     const p = this.player;
+    const mix: ZombieKind[] = ['walker', 'runner', 'brute', 'exploder', 'walker'];
     for (let i = 0; i < n; i++) {
       const a = Math.atan2(this.aimX, this.aimZ) + (i - (n - 1) / 2) * 0.32;
       const d = 5 + (i % 2) * 1.2;
-      this.zombies.spawn(p.x + Math.sin(a) * d, p.z + Math.cos(a) * d, a + Math.PI);
+      this.zombies.spawn(p.x + Math.sin(a) * d, p.z + Math.cos(a) * d, a + Math.PI, kind === 'mix' ? mix[i % mix.length] : kind);
     }
   }
 
@@ -733,8 +1051,9 @@ export class Game {
       let dx = t.x - x, dz = t.z - z;
       const d = Math.max(0.5, Math.hypot(dx, dz));
       if (d > radius) continue;
-      // Explosive barrels in range catch the blast and go off moments later (chain reaction).
-      if (prop.explosive) this.ignite(prop, 0.15 + Math.random() * 0.25);
+      // Explosive barrels in range catch the blast and go off moments later (chain reaction),
+      // late enough for the player to see the danger zone and step out.
+      if (prop.explosive) this.ignite(prop, 0.6 + Math.random() * 0.3);
       const f = (1 - d / radius) * 220;
       dx /= d; dz /= d;
       prop.body.applyImpulse({ x: dx * f, y: f * 0.8, z: dz * f }, true);
@@ -751,7 +1070,7 @@ export class Game {
   /** Light an explosive barrel's fuse (no-op if already burning). */
   ignite(prop: DynamicProp, fuse = 1): void {
     if (!prop.explosive || prop.fuse !== undefined) return;
-    prop.fuse = fuse;
+    prop.fuse = prop.fuseTotal = fuse;
     this.sfx.hiss();
   }
 
@@ -770,7 +1089,71 @@ export class Game {
       this.renderer.scene.remove(prop.mesh);
       this.physics.world.removeRigidBody(prop.body);
       this.stats.barrels++;
-      this.explode(t.x, t.y, t.z, 5);
+      this.explode(t.x, t.y, t.z, BARREL_BLAST_RADIUS);
+    }
+  }
+
+  /** Throw a grenade from the player's hand to land at offset (dx, dz) from the player. */
+  throwGrenade(dx: number, dz: number): void {
+    const p = this.player;
+    if (!p.alive || p.grenades <= 0) return;
+    p.grenades--;
+    this.stats.grenadesThrown++;
+    // Release a little in front of the player, but never inside a wall they're hugging.
+    const l = Math.hypot(dx, dz) || 1, ux = dx / l, uz = dz / l, y0 = GRENADE.releaseHeight;
+    const wall = this.physics.raycast(p.x, y0, p.z, ux, 0, uz, 0.5, groups(Group.PLAYER, Group.STATIC | Group.PROP), p.collider);
+    const off = wall ? Math.max(0, wall.toi - 0.15) : 0.5;
+    const x0 = p.x + ux * off, z0 = p.z + uz * off;
+    const v = throwVelocity(p.x + dx - x0, p.z + dz - z0, y0);
+    this.grenades.push(spawnGrenade(this.physics, x0, y0, z0, v));
+    const mesh = new THREE.Mesh(this.grenadeGeo, this.grenadeMat);
+    mesh.castShadow = true;
+    mesh.add(new THREE.Mesh(this.grenadeLightGeo, this.grenadeLightMat));
+    this.renderer.scene.add(mesh);
+    this.grenadeMeshes.push(mesh);
+    this.sfx.throwGrenade();
+  }
+
+  /** Live grenades: bounce clinks, fuse beeps, then the blast (same explosion as a barrel). */
+  private updateGrenades(dt: number): void {
+    for (let i = this.grenades.length - 1; i >= 0; i--) {
+      const g = this.grenades[i];
+      const before = g.fuse;
+      const r = stepGrenade(g, dt);
+      // Beeps speed up as the fuse runs down.
+      const period = g.fuse < 0.6 ? 0.12 : 0.4;
+      if (r !== 'boom' && Math.floor(before / period) !== Math.floor(g.fuse / period)) this.sfx.beep();
+      if (r === 'bounce') this.sfx.clink();
+      for (const z of this.zombies.zombies) if (z.state === 'alive' && hitZombie(g, z.x, z.z)) { this.sfx.thud(0.3, true); break; }
+      if (r !== 'boom') continue;
+      const t = g.body.translation();
+      this.removeGrenade(i);
+      this.stats.grenadeBlasts++;
+      this.explode(t.x, Math.max(0.2, t.y), t.z, GRENADE.radius * this.grenadeRadiusMul);
+    }
+  }
+
+  private removeGrenade(i: number): void {
+    this.physics.world.removeRigidBody(this.grenades[i].body);
+    const mesh = this.grenadeMeshes[i];
+    this.renderer.scene.remove(mesh);
+    this.grenades.splice(i, 1);
+    this.grenadeMeshes.splice(i, 1);
+  }
+
+  /** Exploders: lit ones count down (killed ones pop after a short delay), then blow up. */
+  private updateExploders(dt: number): void {
+    for (const zb of this.zombies.zombies) {
+      if (zb.kind !== 'exploder' || zb.exploded) continue;
+      if (!zb.alive && zb.fuse === undefined) zb.fuse = zb.fuseTotal = EXPLODER.deathFuse;
+      if (zb.fuse === undefined) continue;
+      if (zb.fuse === zb.fuseTotal) this.sfx.hiss();
+      zb.fuse -= dt;
+      if (zb.fuse > 0) continue;
+      zb.exploded = true;
+      const t = zb.parts[1].body.translation();
+      this.stats.exploderBlasts++;
+      this.explode(t.x, Math.max(0.3, t.y), t.z, EXPLODER.radius);
     }
   }
 
@@ -811,6 +1194,9 @@ export class Game {
       zombiesAlive: this.zombies.aliveCount, ragdolls: this.zombies.ragdollCount, severed: this.zombies.severedCount,
       zombieHits: this.stats.zombieHits, kills: this.stats.kills, dismembers: this.stats.dismembers,
       damageTaken: this.stats.damageTaken, playerAlive: this.player.alive, wave: this.waves.wave, waveState: this.waves.state,
+      grenades: p.grenades, unlocked: p.unlocked, upgradeChoices: this.upgradeChoices?.map((u) => u.id) ?? null,
+      upgradesTaken: [...this.upgradesTaken.values()].reduce((a, b) => a + b, 0), maxHealth: p.maxHealth, pistolDamage: p.weapons[0].def.damage, exploderBlasts: this.stats.exploderBlasts, grenadesLive: this.grenades.length, grenadesThrown: this.stats.grenadesThrown,
+      grenadeBlasts: this.stats.grenadeBlasts, grenadeMode: this.grenadeMode, arcVisible: this.arcDots.visible,
       barrels: this.stats.barrels, explosiveBarrels: this.props.filter((q) => q.explosive).length,
       reserve: p.weapon.reserve, pickups: this.pickups.list.map((q) => q.kind), smgReserve: p.weapons[1].reserve, crawlers: this.zombies.zombies.filter((z) => z.crawler && z.alive).length,
       fps: this.debug.fps, physicsMs: this.debug.avgPhysicsMs,

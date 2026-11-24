@@ -33,6 +33,13 @@ export interface WeaponDef {
   bulletSpeed: number;
   /** Max vertical scatter (rad), biased low so some shots catch legs. */
   vSpread: number;
+  /**
+   * Point-blank boost on zombie hits: impulse × `mul` up to `range` m, fading to ×1 at `fade` m.
+   * A boosted pellet beats limbs' break impulses (they tear off at once) and slams the body back.
+   */
+  closeBoost?: { range: number; fade: number; mul: number };
+  /** Vertical recoil (rad): each shot lifts the next shot's pitch; decays over ~0.3 s (pistol → headshots). */
+  pitchKick?: number;
   /** Multiplier on damage dealt to a limb's own health (how fast it tears limbs off). */
   limbMult: number;
   /** Hit-reaction strength on zombies (pistol: clear jolt per shot; SMG: small tremors that build). */
@@ -54,9 +61,10 @@ export const WEAPONS: Record<string, WeaponDef> = {
     recoilPattern: [0], penetration: 0.7, pushback: 0.9, activeWindow: [0.45, 0.62], casingSound: false, reserveStart: Infinity, reserveMax: Infinity,
     bulletSpeed: 70, vSpread: 0.06, limbMult: 1, flinch: 1.8,
     traceWidth: 0.06, traceLength: 0.9, falloffStart: 40, shellReload: false,
+    pitchKick: 0.035,
   },
   smg: {
-    id: 'smg', name: 'SMG', damage: 14, fireInterval: 0.085, magSize: 30, reloadTime: 1.6,
+    id: 'smg', name: 'SMG', damage: 21, fireInterval: 0.085, magSize: 30, reloadTime: 1.6,
     spread: 0.03, range: 32, impulse: 11, pellets: 1, automatic: true, shake: 0.1, recoil: 0.55,
     aimTurn: 6, settle: 2.5, recoilBloom: 0.35, aimKick: 0.006,
     recoilPattern: [0.012, 0.016, 0.014, 0.008, -0.004, -0.014, -0.018, -0.012, 0.002, 0.014, 0.018, 0.01],
@@ -66,12 +74,13 @@ export const WEAPONS: Record<string, WeaponDef> = {
   },
   shotgun: {
     id: 'shotgun', name: 'Shotgun', damage: 16, fireInterval: 0.85, magSize: 6, reloadTime: 0.45,
-    spread: 0.11, range: 22, impulse: 9, pellets: 12, automatic: false, shake: 0.55, recoil: 1,
+    spread: 0.145, range: 22, impulse: 9, pellets: 12, automatic: false, shake: 0.55, recoil: 1,
     aimTurn: 7, settle: 3, recoilBloom: 1.6, aimKick: 0.03,
     recoilPattern: [0], penetration: 0.4, pushback: 2.2, activeWindow: [2, 2], casingSound: false,
     reserveStart: 18, reserveMax: 36,
     bulletSpeed: 65, vSpread: 0.05, limbMult: 1.4, flinch: 1.2,
-    traceWidth: 0.05, traceLength: 0.55, falloffStart: 6, shellReload: true,
+    traceWidth: 0.07, traceLength: 0.8, falloffStart: 6, shellReload: true,
+    closeBoost: { range: 3, fade: 6, mul: 4 },
   },
 };
 
@@ -94,7 +103,8 @@ export class WeaponState {
   private sinceShot = 99;
   private dryCooldown = 0;
 
-  constructor(readonly def: WeaponDef) {
+  /** Per-run copy of the weapon's stats (upgrades modify it; restart restores WEAPONS). */
+  constructor(public def: WeaponDef) {
     this.ammo = def.magSize;
     this.reserve = def.reserveStart;
   }

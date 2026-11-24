@@ -82,7 +82,7 @@ scripts/smoke.mjs  Playwright: real browser, desktop + phone touch, screenshots
 Playable on GitHub Pages (`main` auto-deploys via `.github/workflows/ci-deploy.yml` when CI passes).
 
 **Done:** P0 pipeline · P1 player · P2 Ragdoll Lab · P3 zombie AI · P4 chunk 1 (waves, reserve ammo, loot, run stats)
-· P4 chunk 2 (shotgun, explosive barrels).
+· P4 chunk 2 (shotgun, explosive barrels) · P4 chunk 3 (grenades) · P4 chunk 4 (weapon unlocks, grenade pickups, top HUD) · weapon VFX.
 
 Key systems and where they live:
 | System | Files |
@@ -95,10 +95,13 @@ Key systems and where they live:
 | Zombie AI (flow-field nav grid, senses, separation, prop avoidance + limited push, stuck detour, attacks) | `src/ai/navGrid.ts`, `src/ai/zombieAI.ts` |
 | Instanced zombie rendering (11 draw calls for any crowd) | `src/render/zombieRenderer.ts` |
 | Waves, loot | `src/systems/waves.ts`, `src/systems/pickups.ts` |
-| Arena, props, explosive barrels | `src/world/arena.ts` |
-| HUD, pause menu, Lab panel | `src/ui/hud.ts`, `src/main.ts`, `index.html`, `src/style.css` |
+| Arena, props (crates, explosive barrels, dumpsters, cones; static sandbag walls — bullets fly over), burning wreck | `src/world/arena.ts`, `Game.updateFires` |
+| Grenades (💣 arms → right stick aims arc, push further = further, lift throws; desktop hold G; CCD box, bounce, 2 s fuse → `game.explode`; drop at a living zombie's feet; 3 at start, +1 per cleared wave, max 5) | `src/weapons/grenade.ts`, `src/game.ts` (`resolveGrenade`, `throwGrenade`, `updateGrenades`, `updateGrenadeArc`), `src/input/touchSticks.ts` |
+| HUD (top-left column: wave, health, weapon/ammo/💣; touch buttons R/💣/⇄ bottom-right), pause menu, Lab panel | `src/ui/hud.ts`, `src/main.ts`, `index.html`, `src/style.css` |
+| Weapon unlocks (survival: pistol → SMG wave 2 → shotgun wave 4; Lab/?nozombies: all) | `WEAPON_UNLOCKS` in `src/systems/waves.ts`, `Player.unlocked`, `Game.unlockWeapons` |
+| Weapon VFX (per-weapon `TRACER_STYLES`: glowing round + short fading streak, voxel star muzzle flash + glow, impact burst, soft smoke; pooled/instanced) | `src/render/weaponVfx.ts` (fallback `bulletViews.ts`) |
 
-Tests: `npm test` (Vitest, headless Rapier; ~63 tests) and `npm run build && npm run smoke`
+Tests: `npm test` (Vitest, headless Rapier; ~68 tests) and `npm run build && npm run smoke`
 (Playwright: desktop, iPhone 13, Pixel 7 touch, Lab, survival, arsenal). `SMOKE_ONLY=<scenario>` runs one;
 `SMOKE_CPU_THROTTLE=4` simulates slow CI. Tests that depend on randomness use seeded `rng` (`src/core/math.ts`).
 
@@ -113,10 +116,9 @@ Tests: `npm test` (Vitest, headless Rapier; ~63 tests) and `npm run build && npm
 
 ## Next up
 
-- **P4 chunk 3:** grenades (touch arc-aim with right stick, bounce, fuse, uses existing `game.explode`).
-- **P4 chunk 4:** weapon unlocks by wave (SMG wave 2, shotgun wave 4), grenade pickups, compact portrait HUD.
-- **P5:** upgrades between waves; runner / brute / exploder zombie types (use per-zombie `speedMul`, `slowPerHit`,
-  `minSpeedMul`, `player.slowMul` for pinning); more props.
+- **P5** (chunks): 1 ✅ runner + brute types (`ZOMBIE_TYPES` in `src/entities/zombie.ts`, wave mix in `waveTuning`);
+  2 ✅ exploder (`EXPLODER`, fuse in AI + `Game.updateExploders`); 3 ✅ upgrades (`src/systems/upgrades.ts`, cards in `Hud.showUpgrades`;
+  break waits for a pick) + fixed per-wave rosters (`waveRoster`) + Lab type spawning; 4 ✅ props (sandbag walls, dumpsters, cones, burning wreck `FIRES`).
 
 ## Roadmap
 
@@ -126,7 +128,7 @@ Tests: `npm test` (Vitest, headless Rapier; ~63 tests) and `npm run build && npm
 | P1 Player | Voxel survivor, movement/aim (keys+mouse, twin-stick touch), pistol, effects, arena | ✅ |
 | P2 Ragdoll Lab | Ragdoll builder, anim→ragdoll handoff, bullet/explosion reactions, breakable joints, limb pool + caps | ✅ |
 | P3 Zombie AI | Walker, flow-field pathing, separation, attacks, hit reactions, crawlers | ✅ |
-| P4 Combat loop | Shotgun/SMG/grenade, explosive barrels, loot, waves, HUD, audio | chunks 1–2 ✅, 3–4 next |
-| P5 Progression | Upgrades, runner/brute/exploder types, more props | |
+| P4 Combat loop | Shotgun/SMG/grenade, explosive barrels, loot, waves, HUD, audio | ✅ |
+| P5 Progression | Upgrades, runner/brute/exploder types, more props | ✅ |
 | P6 Polish & perf | Lighting/VFX, quality presets | |
 | P7 Co-op prep | Net transport interface, host-authoritative sim prototype | |

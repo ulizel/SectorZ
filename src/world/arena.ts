@@ -5,16 +5,24 @@ import { Group, groups, ALL, RAPIER, type PhysicsWorld } from '../physics/physic
 import { box, jitterColor, PAL, UNIT_BOX } from '../render/voxel';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
+/** Burning wreck fire sources (x, y, z): the game emits flames, embers and smoke there each frame. */
+export const FIRES: [number, number, number][] = [[-4.5, 1.1, -18.5]];
+
+/** The one lamp post still (barely) working: the game flickers this material's glow. */
+export const FLICKER_LAMP = new THREE.MeshLambertMaterial({ color: PAL.lamp, emissive: PAL.lamp });
+
 export interface DynamicProp {
   body: RAPIER.RigidBody;
   mesh: THREE.Object3D;
-  kind: 'crate' | 'barrel';
+  kind: 'crate' | 'barrel' | 'dumpster' | 'cone';
   /** Footprint radius (m) for AI avoidance. */
   radius: number;
   /** Explodes when shot / caught in a blast. */
   explosive?: boolean;
   /** Seconds until it goes off (set once ignited). */
   fuse?: number;
+  /** Fuse length when lit (s), for the danger-zone warning. */
+  fuseTotal?: number;
 }
 
 /** A barrel prop (plain or explosive). Exported so the game can drop fresh ones between waves. */
@@ -81,6 +89,24 @@ export function buildArena(scene: THREE.Scene, physics: PhysicsWorld, seed = 7):
   // Wrecked car (static, built from blocks).
   buildCar(scene, physics, -14, -14, 0.4);
   buildCar(scene, physics, 13, 12, -0.9);
+  // Burnt-out wreck, still on fire (flames/smoke are emitted by the game at FIRES).
+  buildCar(scene, physics, -4.5, -18.5, 1.4, true);
+
+  // Sandbag walls: low (0.8 m) cover. Blocks zombies and the player, but bullets (1.15 m) fly over.
+  // [x, z, length, along X?]
+  const BAG = [0xb59a6a, 0x9c8458, 0xa88f60];
+  for (const [x, z, len, alongX] of [[-16, 9, 3.2, 1], [16.5, -9.5, 3.2, 1], [-7, 17.5, 3, 1], [7, -17.5, 3, 1], [-18.5, -10, 2.6, 0], [18.5, 10, 2.6, 0]] as const) {
+    for (let row = 0; row < 3; row++) {
+      const n = Math.round(len / 0.55), off = row % 2 ? 0.275 : 0; // staggered bags
+      for (let i = 0; i < n - (row % 2); i++) {
+        const t = -len / 2 + 0.275 + i * 0.55 + off, bw = 0.52 - row * 0.02;
+        blocks.push(alongX
+          ? { x: x + t, y: 0.135 + row * 0.27, z, w: bw, h: 0.26, d: 0.42 - row * 0.03, color: BAG[(i + row) % 3] }
+          : { x, y: 0.135 + row * 0.27, z: z + t, w: 0.42 - row * 0.03, h: 0.26, d: bw, color: BAG[(i + row) % 3] });
+      }
+    }
+    addStatic(x, 0.4, z, alongX ? len : 0.45, 0.8, alongX ? 0.45 : len, 0, false);
+  }
 
   // Instanced static blocks: one draw call for all the concrete.
   const inst = new THREE.InstancedMesh(UNIT_BOX, new THREE.MeshLambertMaterial({ color: 0xffffff }), blocks.length);
@@ -93,10 +119,13 @@ export function buildArena(scene: THREE.Scene, physics: PhysicsWorld, seed = 7):
   scene.add(inst);
 
   // Lamp posts with warm emissive heads (cheap "light", no real point lights).
-  for (const [x, z] of [[-15, 0], [15, 0], [0, -17], [0, 17]] as const) {
+  // Night: the lamps are dead except one that flickers (FLICKER_LAMP).
+  for (const [x, z, alive] of [[-15, 0, 0], [15, 0, 1], [0, -17, 0], [0, 17, 0]] as const) {
     scene.add(box(0.18, 3.2, 0.18, PAL.metal, x, 1.6, z));
     scene.add(box(0.5, 0.18, 0.5, PAL.metal, x, 3.25, z));
-    scene.add(box(0.36, 0.08, 0.36, PAL.lamp, x, 3.14, z, PAL.lamp));
+    const head = box(0.36, 0.08, 0.36, alive ? PAL.lamp : 0x3a3a36, x, 3.14, z);
+    if (alive) head.material = FLICKER_LAMP;
+    scene.add(head);
     addStatic(x, 1.6, z, 0.2, 3.2, 0.2, 0, false, 'metal');
   }
 
@@ -138,6 +167,30 @@ export function buildArena(scene: THREE.Scene, physics: PhysicsWorld, seed = 7):
     if (r() < 0.6) crate(x + 0.1, 1.8, z - 0.05, 1.2);
   }
   crate(-3, 0.45, -3, 0.9); crate(-2.2, 0.45, -3.3, 0.9); crate(-2.6, 1.35, -3.15, 0.9);
+  // Dumpsters: heavy metal bins (~400 kg) — bullets stop on them, only blasts shove them.
+  for (const [x, z, yaw] of [[-18, -1, Math.PI / 2], [18, 2.5, Math.PI / 2]] as const) {
+    const body = w.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(x, 0.62, z).setRotation(quatY(yaw))
+      .setLinearDamping(0.5).setAngularDamping(0.8));
+    const col = w.createCollider(RAPIER.ColliderDesc.cuboid(1.0, 0.6, 0.55).setDensity(160).setFriction(0.9).setRestitution(0.05)
+      .setCollisionGroups(groups(Group.PROP, ALL)), body);
+    physics.materials.set(col.handle, 'metal');
+    const g = new THREE.Mesh(dumpsterGeo(), new THREE.MeshLambertMaterial({ vertexColors: true }));
+    g.castShadow = g.receiveShadow = true;
+    scene.add(g);
+    props.push({ body, mesh: g, kind: 'dumpster', radius: 1.2 });
+  }
+  // Traffic cones: light plastic, fly when shot or blasted.
+  for (const [x, z] of [[-6, 6], [-5.2, 6.7], [9, -12], [9.8, -12.5], [-12, -12], [14, -15], [-17, 14], [3, -15]] as const) {
+    const body = w.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(x, 0.3, z).setLinearDamping(0.3).setAngularDamping(0.6));
+    const col = w.createCollider(RAPIER.ColliderDesc.cone(0.28, 0.18).setDensity(110).setFriction(0.6).setRestitution(0.3)
+      .setCollisionGroups(groups(Group.PROP, ALL)), body);
+    physics.materials.set(col.handle, 'wood');
+    const g = new THREE.Mesh(coneGeo(), new THREE.MeshLambertMaterial({ vertexColors: true }));
+    g.castShadow = true;
+    scene.add(g);
+    props.push({ body, mesh: g, kind: 'cone', radius: 0.25 });
+  }
+
   // Every other barrel is explosive (hazard stripe).
   [[6, -1], [6.8, -1.6], [-5, 1], [2, 14], [-15, -6], [15, 6]].forEach(([x, z], i) => props.push(spawnBarrel(scene, physics, x, z, i % 2 === 0)));
 
@@ -150,11 +203,11 @@ function quatY(a: number) { return { x: 0, y: Math.sin(a / 2), z: 0, w: Math.cos
  * Wrecked car: one merged, properly rotated voxel mesh, with colliders that match the body
  * and cabin exactly (bullets fly over the bonnet and hit the cabin, no invisible walls).
  */
-function buildCar(scene: THREE.Scene, physics: PhysicsWorld, cx: number, cz: number, yaw: number): void {
+function buildCar(scene: THREE.Scene, physics: PhysicsWorld, cx: number, cz: number, yaw: number, burnt = false): void {
   const parts: [number, number, number, number, number, number, number][] = [
     // x, y, z (local), w, h, d, colour
-    [0, 0.55, 0, 1.9, 0.7, 4, PAL.rust],
-    [0, 1.15, -0.3, 1.7, 0.5, 2, 0x6f7f8a],
+    [0, 0.55, 0, 1.9, 0.7, 4, burnt ? 0x2a2522 : PAL.rust],
+    [0, 1.15, -0.3, 1.7, 0.5, 2, burnt ? 0x1b1a1a : 0x6f7f8a],
     [-0.9, 0.3, 1.3, 0.3, 0.6, 0.6, 0x1d1d1f], [0.9, 0.3, 1.3, 0.3, 0.6, 0.6, 0x1d1d1f],
     [-0.9, 0.3, -1.3, 0.3, 0.6, 0.6, 0x1d1d1f], [0.9, 0.3, -1.3, 0.3, 0.6, 0.6, 0x1d1d1f],
   ];
@@ -170,6 +223,24 @@ function buildCar(scene: THREE.Scene, physics: PhysicsWorld, cx: number, cz: num
       .setRotation(rot).setCollisionGroups(groups(Group.STATIC, ALL)).setFriction(0.8));
     physics.materials.set(col.handle, 'metal');
   }
+}
+
+/** Dumpster (body-centred): green bin, dark lid, side bars, castors. */
+function dumpsterGeo(): THREE.BufferGeometry {
+  const G = 0x2f5a3a, L = 0x22422b, M = 0x5d6168, K = 0x1d1d1f;
+  return mergeColoredBoxes([
+    [0, 0.05, 0, 1.96, 0.95, 1.06, G], [0, 0.57, 0, 2.02, 0.1, 1.1, L], [0, 0.1, 0.56, 1.7, 0.08, 0.04, M], [0, -0.2, 0.56, 1.7, 0.08, 0.04, M],
+    [0, 0.1, -0.56, 1.7, 0.08, 0.04, M], [-0.85, -0.53, 0.4, 0.14, 0.14, 0.14, K], [0.85, -0.53, 0.4, 0.14, 0.14, 0.14, K],
+    [-0.85, -0.53, -0.4, 0.14, 0.14, 0.14, K], [0.85, -0.53, -0.4, 0.14, 0.14, 0.14, K],
+  ]);
+}
+
+/** Traffic cone (centred on the collider's middle): stepped voxel tiers, orange with a white band. */
+function coneGeo(): THREE.BufferGeometry {
+  const O = 0xe8661c, W = 0xeeeeea;
+  return mergeColoredBoxes([
+    [0, -0.27, 0, 0.4, 0.05, 0.4, O], [0, -0.15, 0, 0.26, 0.2, 0.26, O], [0, 0.02, 0, 0.19, 0.14, 0.19, W], [0, 0.17, 0, 0.13, 0.16, 0.13, O],
+  ]);
 }
 
 /** Merge coloured boxes into one geometry (vertex colours, no UVs). */

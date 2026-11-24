@@ -1,5 +1,5 @@
 import { NavGrid } from './navGrid';
-import type { Zombie } from '../entities/zombie';
+import { EXPLODER, type Zombie } from '../entities/zombie';
 import { PART_INDEX } from '../rigs/humanoid';
 import { angleDelta } from '../core/math';
 import { Group, groups, type PhysicsWorld } from '../physics/physicsWorld';
@@ -12,11 +12,11 @@ export const AI = {
   turnRate: 4, // rad/s
   crawlSpeed: 0.55,
   wanderSpeed: 0.45,
-  attackRange: 1.05, // start an attack when this close (m, centre to centre)
+  attackRange: 1.3, // start an attack when this close (m, centre to centre)
   crawlAttackRange: 0.95,
-  strikeReach: 1.35, // hit lands if the player is still within this at the strike
-  windup: 0.5, // s (dodge window)
-  recover: 0.7,
+  strikeReach: 1.8, // hit lands if the player is still within this at the strike
+  windup: 0.3, // s (short dodge window: you must react to the snarl)
+  recover: 0.45,
   damage: 12,
   separation: 0.85, // personal space between zombies (m)
 };
@@ -156,9 +156,9 @@ export class ZombieAI {
       if (!b.struck && b.attackT >= wind) {
         b.struck = true;
         const facing = Math.abs(angleDelta(z.yaw, Math.atan2(dx, dz))) < 0.9;
-        if (t.alive && facing && dist < AI.strikeReach) {
+        if (t.alive && facing && dist < AI.strikeReach * z.scale) {
           // Fewer arms = weaker attack (armless zombies can only bite).
-          const dmg = AI.damage * (arms === 2 ? 1 : arms === 1 ? 0.65 : 0.4) * (crawler ? 0.7 : 1);
+          const dmg = AI.damage * z.damageMul * (arms === 2 ? 1 : arms === 1 ? 0.65 : 0.4) * (crawler ? 0.7 : 1);
           attacks.push({ zombie: z, damage: dmg });
         }
         // Lunge forward on the strike.
@@ -174,7 +174,13 @@ export class ZombieAI {
     z.attackPose = 0;
 
     if (b.mode === 'chase') {
-      if (dist < (crawler ? AI.crawlAttackRange : AI.attackRange) && t.alive) {
+      if (z.kind === 'exploder' && (z.fuse !== undefined || dist < AI.attackRange * 1.3) && t.alive) {
+        // Exploders don't swing: they stop and light themselves (the game blows them up).
+        if (z.fuse === undefined) { z.fuse = z.fuseTotal = EXPLODER.fuse; }
+        z.speed = 0;
+        return;
+      }
+      if (dist < (crawler ? AI.crawlAttackRange : AI.attackRange) * z.scale && t.alive) {
         b.mode = 'attack'; b.attackT = 0; b.struck = false;
         z.speed = 0;
         return;

@@ -3,6 +3,7 @@ import { angleDelta, damp } from '../core/math';
 import type { InputCommand } from '../input/commands';
 import { Group, groups, ALL, RAPIER, type PhysicsWorld } from '../physics/physicsWorld';
 import { WEAPONS, WeaponState } from '../weapons/weapon';
+import { GRENADE } from '../weapons/grenade';
 
 /**
  * Player simulation state. No rendering here: the same class would run on a co-op host
@@ -19,17 +20,26 @@ export class Player {
   vx = 0; vz = 0;
   yaw = 0; prevYaw = 0;
   health = PLAYER.maxHealth;
+  // Per-run stats (upgrades raise them; restart resets).
+  maxHealth = PLAYER.maxHealth;
+  /** Move speed multiplier. */
+  speedMul = 1;
+  grenadeMax = GRENADE.max;
   walkPhase = 0;
   /** Movement speed multiplier set by the game each tick (crowds slow you; pinning sets 0). */
   slowMul = 1;
   readonly weapons = [new WeaponState(WEAPONS.pistol), new WeaponState(WEAPONS.smg), new WeaponState(WEAPONS.shotgun)];
   weaponIndex = 0;
+  /** How many weapon slots are usable (survival unlocks them by wave; Lab/tests have all). */
+  unlocked = 3;
+  grenades = GRENADE.start;
   get weapon(): WeaponState { return this.weapons[this.weaponIndex]; }
 
   /** Switch to a slot (or -1 = next). Returns true if the weapon changed. */
   switchWeapon(slot: number): boolean {
-    const next = slot < 0 ? (this.weaponIndex + 1) % this.weapons.length : slot;
-    if (next === this.weaponIndex || next >= this.weapons.length) return false;
+    const n = Math.min(this.unlocked, this.weapons.length);
+    const next = slot < 0 ? (this.weaponIndex + 1) % n : slot;
+    if (next === this.weaponIndex || next >= n) return false;
     this.weapon.cancelReload();
     this.weaponIndex = next;
     return true;
@@ -63,7 +73,8 @@ export class Player {
     if (!this.alive) { cmd.moveX = cmd.moveZ = cmd.aimX = cmd.aimZ = 0; cmd.trigger = cmd.triggerTap = false; }
 
     // Accelerate toward the target velocity (snappy but not instant).
-    const tx = cmd.moveX * PLAYER.moveSpeed * this.slowMul, tz = cmd.moveZ * PLAYER.moveSpeed * this.slowMul;
+    const sp = PLAYER.moveSpeed * this.speedMul * this.slowMul;
+    const tx = cmd.moveX * sp, tz = cmd.moveZ * sp;
     const hasInput = cmd.moveX !== 0 || cmd.moveZ !== 0;
     const rate = hasInput ? PLAYER.accel : PLAYER.decel;
     const dvx = tx - this.vx, dvz = tz - this.vz;

@@ -59,6 +59,7 @@ async function boot(): Promise<void> {
     document.getElementById('touch')!,
     document.getElementById('reload-btn')!,
     document.getElementById('switch-btn')!,
+    document.getElementById('grenade-btn')!,
     quality,
   );
   api.game = game;
@@ -79,8 +80,8 @@ async function boot(): Promise<void> {
   game.renderer.render();
 
   status.textContent = quality.name === 'mobile'
-    ? 'Left thumb: move · Right thumb: drag to aim, release to shoot (SMG: hold) · ⇄ weapon'
-    : 'WASD move · Mouse aim · Click fire · R reload · 1/2/Q switch weapon';
+    ? 'Left thumb: move · Right thumb: drag to aim, release to shoot (SMG: hold) · ⇄ weapon · 💣 then drag to throw'
+    : 'WASD move · Mouse aim · Click fire · R reload · 1/2/Q switch weapon · hold G to aim a grenade, release to throw';
   startBtn.disabled = false;
   labBtn.disabled = false;
   startBtn.textContent = quality.name === 'mobile' ? 'TAP TO PLAY' : 'CLICK TO PLAY';
@@ -115,8 +116,15 @@ function enterLab(game: Game): void {
   game.lab = true;
   document.body.classList.add('lab');
   game.spawnZombies(5);
+  // Type button cycles what SPAWN makes (key X).
+  const kinds = [['walker', 'WALK'], ['runner', 'RUN'], ['brute', 'BRUTE'], ['exploder', 'BOOM'], ['mix', 'MIX']] as const;
+  let kind = 0;
   const actions: Record<string, (btn?: HTMLElement) => void> = {
-    spawn: () => game.spawnZombies(5),
+    spawn: () => game.spawnZombies(5, kinds[kind][0]),
+    type: (btn) => {
+      kind = (kind + 1) % kinds.length;
+      (btn ?? document.querySelector('[data-lab="type"]'))!.textContent = kinds[kind][1];
+    },
     boom: () => game.explodeAtAim(),
     slow: (btn) => {
       game.loop.timeScale = game.loop.timeScale === 1 ? 0.25 : 1;
@@ -131,7 +139,7 @@ function enterLab(game: Game): void {
   document.querySelectorAll<HTMLElement>('#lab-panel button').forEach((b) => {
     b.addEventListener('pointerdown', (e) => { e.stopPropagation(); e.preventDefault(); actions[b.dataset.lab!](b); });
   });
-  const keys: Record<string, string> = { KeyZ: 'spawn', KeyB: 'boom', KeyT: 'slow', KeyC: 'clear', KeyI: 'ai' };
+  const keys: Record<string, string> = { KeyX: 'type', KeyZ: 'spawn', KeyB: 'boom', KeyT: 'slow', KeyC: 'clear', KeyI: 'ai' };
   addEventListener('keydown', (e) => { const a = keys[e.code]; if (a && !e.repeat) actions[a](); });
 }
 

@@ -16,10 +16,18 @@ export interface InputCommand {
   reload: boolean;
   /** Weapon slot to switch to, or -1 for "next", or null for no change. */
   switchWeapon: number | null;
+  /** A grenade throw is being aimed (no shooting this tick). */
+  grenadeMode: boolean;
+  /** Landing point of the throw, as a world offset from the player (0,0 = no target yet). */
+  throwX: number;
+  throwZ: number;
+  /** Release the grenade toward (throwX, throwZ) this tick. */
+  throwGrenade: boolean;
 }
 
 export const emptyCommand = (): InputCommand => ({
   moveX: 0, moveZ: 0, aimX: 0, aimZ: 0, aiming: false, trigger: false, triggerTap: false, reload: false, switchWeapon: null,
+  grenadeMode: false, throwX: 0, throwZ: 0, throwGrenade: false,
 });
 
 /** Raw, device-level state. Resolved into an InputCommand by the game (needs camera + weapon type). */
@@ -43,9 +51,16 @@ export interface RawInput {
   stickTap: boolean;
   reload: boolean;
   switchWeapon: number | null;
+  /** Grenade armed (touch: 💣 button toggled on; keyboard: G held). */
+  grenadeArmed: boolean;
+  /** Touch: throw direction (screen space) + deflection 0..1 while aiming, or captured at release. */
+  grenadeStick: { x: number; y: number; mag: number } | null;
+  /** Throw this tick (touch: thumb lifted outside the deadzone; keyboard: G released). */
+  grenadeThrow: boolean;
 }
 
 export const emptyRaw = (): RawInput => ({
   moveX: 0, moveY: 0, aimScreen: null, mouseHeld: false, mousePressed: false,
   aimStick: null, aimStickMag: 0, stickActive: false, stickFiring: false, stickTap: false, reload: false, switchWeapon: null,
+  grenadeArmed: false, grenadeStick: null, grenadeThrow: false,
 });

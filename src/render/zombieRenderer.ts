@@ -5,8 +5,11 @@ import type { Zombie } from '../entities/zombie';
 
 const SKIN = 0x7d9a6a, SHIRT = 0x5b4a3c, PANTS = 0x3b4250, GORE = 0x7a0f12, GORE_DARK = 0x4a0608, BONE = 0xe8e0c8;
 const BRUISE = new THREE.Color(0x8a3a30); // multiplied with the vertex colours
-const WHITE = new THREE.Color(1, 1, 1);
 const POOL_GEO = new THREE.CircleGeometry(0.5, 10).rotateX(-Math.PI / 2);
+const HEAD = HUMANOID.findIndex((d) => d.name === 'head');
+/** Glowing eyes (head-local, in front of the painted eyes) and their colour per zombie type. */
+const EYES: [number, number, number][] = [[0.07, 0.02, 0.158], [-0.07, 0.02, 0.158]];
+const EYE_COLOR: Record<string, number> = { walker: 0xffc94a, runner: 0xfff2b0, brute: 0xff3a22, exploder: 0x9dff4a };
 
 type Box = [w: number, h: number, d: number, color: number, x: number, y: number, z: number];
 
@@ -68,8 +71,12 @@ export class ZombieRenderer {
   private readonly goreMesh: THREE.InstancedMesh;
   private readonly recs = new Map<Zombie, Rec>();
   private readonly sinking: Rec[] = [];
+  /** Eyes glow in the dark (unlit, no fog): the first warning that something is there. */
+  private readonly eyes: THREE.InstancedMesh;
+  private readonly eyeOffset = EYES.map(([x, y, z]) => new THREE.Matrix4().makeTranslation(x, y, z));
 
   constructor(private readonly scene: THREE.Scene, private readonly capacity = 96, goreCapacity = 2500) {
+    this.eyes = this.makeEyes(capacity);
     const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
     for (const def of HUMANOID) {
       const im = new THREE.InstancedMesh(mergeBoxes(partBoxes(def.name)), mat, capacity);
@@ -128,6 +135,17 @@ export class ZombieRenderer {
     }
   }
 
+  private makeEyes(capacity: number): THREE.InstancedMesh {
+    const m = new THREE.InstancedMesh(new THREE.BoxGeometry(0.08, 0.06, 0.02),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false, fog: false }), capacity * 2);
+    m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 6), 3);
+    m.frustumCulled = false;
+    m.count = 0;
+    this.scene.add(m);
+    return m;
+  }
+
   /** Call once per rendered frame. */
   sync(dt: number, zombies: readonly Zombie[], removed: Zombie[]): void {
     for (const z of zombies) if (!this.recs.has(z)) this.recs.set(z, { z, gore: [], stumped: new Set(), woundsShown: 0, pool: null, poolSize: 0, sink: 0 });
@@ -136,7 +154,7 @@ export class ZombieRenderer {
       if (r) { this.recs.delete(z); this.sinking.push(r); }
     }
     removed.length = 0;
-    let i = 0, g = 0;
+    let i = 0, g = 0, e = 0;
     const goreCap = this.goreMesh.instanceMatrix.count;
     const write = (r: Rec, sinkY: number) => {
       if (i >= this.capacity) return;
@@ -149,13 +167,25 @@ export class ZombieRenderer {
           const t = z.parts[k].body.translation(), q = z.parts[k].body.rotation();
           pv.set(t.x, t.y, t.z); qv.set(q.x, q.y, q.z, q.w);
         }
-        m4.compose(pv, qv, sv.set(1, 1, 1));
+        m4.compose(pv, qv, sv.setScalar(z.scale));
         this.parts[k].setMatrixAt(i, m4);
         // Bruising: parts darken as they lose health (a hint they're about to come off).
         const p = z.parts[k];
-        const frac = p.maxHp === Infinity ? 1 - Math.max(0, z.hp) / 100 : 1 - Math.max(0, p.hp) / p.maxHp;
-        tint.copy(WHITE).lerp(BRUISE, Math.min(0.8, frac * 0.8));
+        const frac = p.maxHp === Infinity ? 1 - Math.max(0, z.hp) / z.maxHp : 1 - Math.max(0, p.hp) / p.maxHp;
+        const ty = z.type.tint; // per-type colouring (runner pale, brute dark)
+        tint.setRGB(ty[0], ty[1], ty[2]).lerp(BRUISE, Math.min(0.8, frac * 0.8));
+        // Lit exploder: pulses brighter and faster as its fuse runs down.
+        if (z.fuse !== undefined && !z.exploded) {
+          const k = 1 - Math.max(0, z.fuse) / z.fuseTotal;
+          tint.multiplyScalar(1 + 0.9 * Math.abs(Math.sin(performance.now() / 1000 * (8 + 22 * k))));
+        }
         this.parts[k].setColorAt(i, tint);
+        if (k === HEAD && z.alive && !p.severed && !z.finalTransforms) {
+          for (const off of this.eyeOffset) {
+            this.eyes.setMatrixAt(e, m4b.multiplyMatrices(m4, off));
+            this.eyes.setColorAt(e++, tint.setHex(EYE_COLOR[z.kind] ?? 0xffc94a));
+          }
+        }
         for (const c of r.gore) {
           if (c.part !== k || g >= goreCap) continue;
           m4b.multiplyMatrices(m4, c.m);
@@ -183,6 +213,9 @@ export class ZombieRenderer {
       im.instanceMatrix.needsUpdate = true;
       if (im.instanceColor) im.instanceColor.needsUpdate = true;
     }
+    this.eyes.count = e;
+    this.eyes.instanceMatrix.needsUpdate = true;
+    this.eyes.instanceColor!.needsUpdate = true;
     this.goreMesh.count = g;
     this.goreMesh.instanceMatrix.needsUpdate = true;
     if (this.goreMesh.instanceColor) this.goreMesh.instanceColor.needsUpdate = true;

@@ -16,6 +16,8 @@ const MOVE_DEADZONE = 0.12;
  * Floating twin sticks (Pointer Events: iOS Safari 13+, Android Chrome):
  *  - left half: movement stick, 360°, releasing stops.
  *  - right half: aim stick (see AimStickLogic): deadzone, aim line, lift-to-fire / hold-to-fire, cancel.
+ *  - 💣 button arms a grenade: the right stick then aims the throw (push further = throw further),
+ *    lifting the thumb outside the deadzone throws; tapping 💣 again cancels. No shooting while armed.
  */
 export class TouchSticks {
   private left: Stick;
@@ -23,9 +25,12 @@ export class TouchSticks {
   readonly aim = new AimStickLogic();
   private reloadQueued = false;
   private switchQueued = false;
+  private grenadeArmed = false;
+  private throwQueued: { x: number; y: number; mag: number } | null = null;
   active = false;
 
-  constructor(private readonly layer: HTMLElement, reloadButton: HTMLElement, switchButton: HTMLElement) {
+  constructor(private readonly layer: HTMLElement, reloadButton: HTMLElement, switchButton: HTMLElement,
+    private readonly grenadeButton: HTMLElement) {
     this.left = this.makeStick('move');
     this.right = this.makeStick('aim');
     layer.addEventListener('pointerdown', (e) => this.onDown(e));
@@ -34,6 +39,13 @@ export class TouchSticks {
     layer.addEventListener('pointercancel', (e) => this.onUp(e, true));
     reloadButton.addEventListener('pointerdown', (e) => { e.stopPropagation(); e.preventDefault(); this.reloadQueued = true; });
     switchButton.addEventListener('pointerdown', (e) => { e.stopPropagation(); e.preventDefault(); this.switchQueued = true; });
+    grenadeButton.addEventListener('pointerdown', (e) => { e.stopPropagation(); e.preventDefault(); this.setArmed(!this.grenadeArmed); });
+  }
+
+  /** Arm / disarm a grenade (the game disarms when there are none left). */
+  setArmed(on: boolean): void {
+    this.grenadeArmed = on;
+    this.grenadeButton.classList.toggle('armed', on);
   }
 
   private makeStick(kind: string): Stick {
@@ -97,6 +109,11 @@ export class TouchSticks {
       s.id = -1;
       s.x = s.y = 0;
       s.base.classList.remove('on', 'aiming', 'firing');
+      // Armed grenade: lifting the thumb outside the deadzone throws along the stick.
+      if (s === this.right && this.grenadeArmed && this.aim.aiming && !cancelled) {
+        this.throwQueued = { x: this.aim.dirX, y: this.aim.dirY, mag: this.aim.mag };
+        this.setArmed(false);
+      }
       if (s === this.right) this.aim.end(cancelled ? -1e9 : performance.now() / 1000); // OS-cancelled touch never fires
     }
   }
@@ -111,7 +128,21 @@ export class TouchSticks {
       out.moveY = (l.y / ll) * m;
     }
     this.aim.update(performance.now() / 1000);
-    if (this.aim.consumeTap() || this.aim.consumeHoldStart()) out.stickTap = true;
+    const tap = this.aim.consumeTap(), hold = this.aim.consumeHoldStart();
+    if (this.throwQueued) {
+      out.grenadeThrow = true;
+      out.grenadeStick = this.throwQueued;
+      this.throwQueued = null;
+    } else if (this.grenadeArmed) {
+      // Grenade aiming: the stick sets the throw, taps/holds never shoot.
+      out.grenadeArmed = true;
+      if (this.aim.aiming) out.grenadeStick = { x: this.aim.dirX, y: this.aim.dirY, mag: this.aim.mag };
+      this.right.base.classList.remove('firing');
+      if (this.reloadQueued) { out.reload = true; this.reloadQueued = false; }
+      if (this.switchQueued) { out.switchWeapon = -1; this.switchQueued = false; }
+      return;
+    }
+    if (tap || hold) out.stickTap = true;
     out.stickActive = this.aim.active;
     out.stickFiring = this.aim.firing;
     this.right.base.classList.toggle('firing', this.aim.firing);

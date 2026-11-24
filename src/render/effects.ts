@@ -104,7 +104,8 @@ export class ParticleSystem {
 
 /** A single reusable point light + voxel flash at the muzzle (always in scene: no shader recompiles). */
 export class MuzzleFlash {
-  readonly light = new THREE.PointLight(0xffb45a, 0, 9, 1.6);
+  // At night each shot briefly lights up the area around you (firing reveals — and gets heard).
+  readonly light = new THREE.PointLight(0xffb45a, 0, 13, 1.5);
   private readonly flash: THREE.Mesh;
   private life = 0;
   private peak = 30;
@@ -115,23 +116,47 @@ export class MuzzleFlash {
     scene.add(this.light, this.flash);
   }
 
-  fire(p: THREE.Vector3, yaw: number, power = 1): void {
+  /** `mesh` false: light only (weapons with a premium voxel flash draw their own). */
+  fire(p: THREE.Vector3, yaw: number, power = 1, mesh = true): void {
     this.light.position.copy(p);
     this.flash.position.copy(p);
     this.flash.rotation.set(Math.random() * 0.5, yaw, Math.random() * Math.PI);
     const s = (0.16 + Math.random() * 0.08) * power;
     this.flash.scale.set(s, s, s * 2.2);
-    this.flash.visible = true;
-    this.life = 0.05;
-    this.light.intensity = 30 * power;
-    this.peak = 30 * power;
+    this.flash.visible = mesh;
+    this.life = 0.06;
+    this.light.intensity = 80 * power;
+    this.peak = 80 * power;
   }
 
   update(dt: number): void {
     if (this.life <= 0) return;
     this.life -= dt;
-    this.light.intensity = Math.max(0, (this.life / 0.05) * this.peak);
+    this.light.intensity = Math.max(0, (this.life / 0.06) * this.peak);
     if (this.life <= 0) { this.flash.visible = false; this.light.intensity = 0; }
+  }
+}
+
+/** A single always-present point light pulsed for blasts: bright flash that fades out. */
+export class PulseLight {
+  readonly light: THREE.PointLight;
+  private life = 0; private max = 1; private peak = 0;
+
+  constructor(scene: THREE.Scene, color: number, distance: number) {
+    this.light = new THREE.PointLight(color, 0, distance, 1.3);
+    scene.add(this.light);
+  }
+
+  fire(x: number, y: number, z: number, intensity: number, life: number): void {
+    this.light.position.set(x, y, z);
+    this.peak = intensity; this.life = this.max = life;
+  }
+
+  update(dt: number): void {
+    if (this.life <= 0) return;
+    this.life -= dt;
+    const t = Math.max(0, this.life / this.max);
+    this.light.intensity = this.peak * t * t;
   }
 }
 
