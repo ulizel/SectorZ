@@ -3,7 +3,8 @@ import { CAMERA } from '../config';
 import { damp } from '../core/math';
 import type { QualityPreset } from '../core/quality';
 
-const SKY = 0x2a3442;
+/** Night: near-black blue sky/fog (the flashlight and fires do the lighting). */
+const SKY = 0x05070c;
 
 export class Renderer {
   readonly renderer: THREE.WebGLRenderer;
@@ -32,15 +33,15 @@ export class Renderer {
     container.appendChild(this.renderer.domElement);
 
     this.scene.background = new THREE.Color(SKY);
-    this.scene.fog = new THREE.Fog(SKY, 26, 52);
+    this.scene.fog = new THREE.Fog(SKY, 13, 30);
 
     this.camera = new THREE.PerspectiveCamera(CAMERA.fov, innerWidth / innerHeight, 0.5, 120);
 
-    // Dusk lighting: cool sky fill, warm low sun with soft shadows.
-    this.scene.add(new THREE.HemisphereLight(0x9fb4d0, 0x3a2f26, 1.6));
-    this.sun = new THREE.DirectionalLight(0xffd2a0, 2.6);
+    // Night: a faint cold moon so walls and shapes read; no moon shadows (the flashlight casts them).
+    this.scene.add(new THREE.HemisphereLight(0x4a5a7a, 0x0c0a08, 0.32));
+    this.sun = new THREE.DirectionalLight(0x8ea0d0, 0.32);
     this.sun.position.set(-12, 22, 8);
-    this.sun.castShadow = quality.shadows;
+    this.sun.castShadow = false;
     const s = this.sun.shadow;
     s.mapSize.set(quality.shadowMapSize, quality.shadowMapSize);
     s.camera.left = -18; s.camera.right = 18; s.camera.top = 18; s.camera.bottom = -18;

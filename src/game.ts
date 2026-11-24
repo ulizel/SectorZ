@@ -23,6 +23,7 @@ import { WEAPONS, type WeaponDef } from './weapons/weapon';
 import { rollUpgrades, type Upgrade } from './systems/upgrades';
 import { Renderer } from './render/renderer';
 import { HumanoidRig, SURVIVOR_LOOK } from './render/humanoidRig';
+import { Flashlight } from './render/flashlight';
 import { BulletHoles, MuzzleFlash, ParticleSystem } from './render/effects';
 import { buildArena, spawnBarrel, FIRES, type DynamicProp } from './world/arena';
 import { Hud } from './ui/hud';
@@ -122,6 +123,7 @@ export class Game {
   private readonly bullets: Bullet[] = [];
   private readonly bulletViews: BulletViews;
   private readonly vfx: WeaponVfx;
+  private readonly flashlight: Flashlight;
   private readonly holes: BulletHoles;
   private readonly blood: BulletHoles;
   private readonly impacts: import('./entities/zombieManager').ImpactResult[] = [];
@@ -171,6 +173,7 @@ export class Game {
     this.holes = new BulletHoles(scene);
     this.bulletViews = new BulletViews(scene);
     this.vfx = new WeaponVfx(scene, this.sparks);
+    this.flashlight = new Flashlight(scene, quality, this.physics);
     this.blood = new BulletHoles(scene, quality.name === 'mobile' ? 40 : 80, 0x5c070a, 0.32, 30, 0.8);
     scene.add(this.sparks.mesh, this.debris.mesh);
 
@@ -723,6 +726,7 @@ export class Game {
 
     this.marker.position.x = x; this.marker.position.z = z;
     this.updateAimLine(x, z);
+    this.flashlight.update(x, z, this.visYaw, frameDt, p.alive);
     this.updateGrenadeArc(x, z);
     for (let i = 0; i < this.grenades.length; i++) {
       const g = this.grenades[i], m = this.grenadeMeshes[i];

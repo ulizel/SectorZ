@@ -14,6 +14,9 @@ html, body {
   overscroll-behavior: none;
 }
 #app, #touch { position: fixed; inset: 0; }
+/* Horror vignette: darkens the screen edges (CSS, free on phones). */
+#vignette { position: fixed; inset: 0; z-index: 1; pointer-events: none;
+  background: radial-gradient(ellipse 75% 65% at 50% 52%, transparent 45%, rgba(0, 0, 0, 0.55) 80%, rgba(0, 0, 0, 0.85) 100%); }
 #app canvas { display: block; width: 100%; height: 100%; }
 #touch { z-index: 2; touch-action: none; cursor: crosshair; }
 
