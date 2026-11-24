@@ -3,8 +3,8 @@ import { CAMERA } from '../config';
 import { damp } from '../core/math';
 import type { QualityPreset } from '../core/quality';
 
-/** Night: near-black blue sky/fog (the flashlight and fires do the lighting). */
-const SKY = 0x05070c;
+/** Moonlit night: deep blue sky/fog; the scene stays readable in blue tones, the flashlight is the highlight. */
+const SKY = 0x14202f;
 
 export class Renderer {
   readonly renderer: THREE.WebGLRenderer;
@@ -33,13 +33,14 @@ export class Renderer {
     container.appendChild(this.renderer.domElement);
 
     this.scene.background = new THREE.Color(SKY);
-    this.scene.fog = new THREE.Fog(SKY, 13, 30);
+    this.scene.fog = new THREE.Fog(SKY, 16, 42);
 
     this.camera = new THREE.PerspectiveCamera(CAMERA.fov, innerWidth / innerHeight, 0.5, 120);
 
-    // Night: a faint cold moon so walls and shapes read; no moon shadows (the flashlight casts them).
-    this.scene.add(new THREE.HemisphereLight(0x4a5a7a, 0x0c0a08, 0.32));
-    this.sun = new THREE.DirectionalLight(0x8ea0d0, 0.32);
+    // Moonlight: cool blue sky fill + a soft moon, bright enough to read the arena; no moon shadows
+    // (the flashlight casts them).
+    this.scene.add(new THREE.HemisphereLight(0x7f9cc8, 0x1c2433, 1.25));
+    this.sun = new THREE.DirectionalLight(0x9db6e2, 0.9);
     this.sun.position.set(-12, 22, 8);
     this.sun.castShadow = false;
     const s = this.sun.shadow;

@@ -13,10 +13,10 @@ export const FLASHLIGHT = {
   groundAt: 9,
   /** Visible light-shaft length (m) and brightness. */
   beamLength: 9,
-  beamStrength: 0.22,
-  /** Dim glow around the player so what's right next to you is always visible. */
-  glowRange: 3.2,
-  glowIntensity: 6,
+  beamStrength: 0.3,
+  /** Soft key light on the player (from the camera side, above) so the character always reads. */
+  glowRange: 5,
+  glowIntensity: 9,
 };
 
 const DUST = 48;
@@ -39,7 +39,7 @@ export class Flashlight {
 
   constructor(scene: THREE.Scene, quality: QualityPreset, private readonly physics: PhysicsWorld) {
     const F = FLASHLIGHT;
-    this.spot = new THREE.SpotLight(0xfff1d6, F.intensity, F.range, F.angle, F.penumbra, 1.6);
+    this.spot = new THREE.SpotLight(0xfff4e2, F.intensity, F.range, F.angle, F.penumbra, 1.6);
     this.spot.castShadow = quality.shadows;
     const sz = quality.name === 'mobile' ? 512 : 1024;
     this.spot.shadow.mapSize.set(sz, sz);
@@ -47,14 +47,14 @@ export class Flashlight {
     this.spot.shadow.camera.far = F.range;
     this.spot.shadow.bias = -0.0008;
     this.spot.shadow.normalBias = 0.02;
-    this.glow = new THREE.PointLight(0xffd9b0, F.glowIntensity, F.glowRange, 2);
+    this.glow = new THREE.PointLight(0xdfe6f5, F.glowIntensity, F.glowRange, 2);
     scene.add(this.spot, this.spot.target, this.glow);
 
     // Light shaft: open cone along +Z from the hand, apex at the origin. The shader fades it along
     // its length and toward its silhouette edges, so it reads as light in the air, not a solid.
     const geo = new THREE.ConeGeometry(1, 1, 20, 1, true).translate(0, -0.5, 0).rotateX(-Math.PI / 2);
     const mat = new THREE.ShaderMaterial({
-      uniforms: { uStrength: { value: F.beamStrength }, uColor: { value: new THREE.Color(0xffe6c2) } },
+      uniforms: { uStrength: { value: F.beamStrength }, uColor: { value: new THREE.Color(0xfff0dc) } },
       vertexShader: /* glsl */`
         varying float vT; varying vec3 vN; varying vec3 vView;
         void main() {
@@ -99,7 +99,7 @@ export class Flashlight {
     this.spot.position.set(ox, F.height, oz);
     this.spot.target.position.set(x + dx * F.groundAt, 0, z + dz * F.groundAt);
     this.spot.target.updateMatrixWorld();
-    this.glow.position.set(x, 1.6, z);
+    this.glow.position.set(x, 2.6, z + 1.4); // camera side: lights the front the camera sees
     if (!on) return;
 
     // The shaft stops at the first wall/prop in front (it's fake, so clip it ourselves).
