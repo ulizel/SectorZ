@@ -129,6 +129,11 @@ export class Game {
   private readonly impacts: import('./entities/zombieManager').ImpactResult[] = [];
   private thudCooldown = 0;
   private fireT = 0; // flame emission accumulator (burning wreck)
+  // Horror audio state: per-zombie growl/step timers and attack edge, global pacing.
+  private readonly voices = new WeakMap<Zombie, { growl: number; step: number; attacking: boolean }>();
+  private growlGap = 0;
+  private moanT = 6;
+  private beatT = 0;
   /** Explosion flash (one pooled light) and the burning wreck's flickering firelight. */
   private readonly blastLight: PulseLight;
   private readonly fireLight: THREE.PointLight;
@@ -545,6 +550,52 @@ export class Game {
     this.dangerRingMat.opacity = 0.55 + 0.4 * Math.abs(Math.sin(this.time * (6 + 14 * progress)));
   }
 
+  /**
+   * Horror soundscape: zombies growl (louder closer, panned to their side), snarl when they start
+   * a swing (the cue to dodge in the dark), the nearest shuffle audibly; distant moans, wind,
+   * and a heartbeat at low health.
+   */
+  private updateAudio(dt: number): void {
+    const p = this.player, sfx = this.sfx;
+    sfx.startAmbience();
+    this.growlGap -= dt;
+    const near: [number, Zombie][] = [];
+    for (const z of this.zombies.zombies) {
+      if (z.state === 'dead') continue;
+      let v = this.voices.get(z);
+      if (!v) { v = { growl: 1 + Math.random() * 4, step: Math.random(), attacking: false }; this.voices.set(z, v); }
+      const dx = z.x - p.x, dz = z.z - p.z, d = Math.hypot(dx, dz);
+      const vol = Math.pow(Math.max(0, 1 - d / 16), 1.5), pan = Math.max(-0.9, Math.min(0.9, dx / 9));
+      const attacking = z.attackPose > 0;
+      if (attacking && !v.attacking) sfx.snarl(Math.max(0.35, vol), pan);
+      v.attacking = attacking;
+      v.growl -= dt;
+      if (v.growl <= 0 && d < 16) {
+        if (this.growlGap <= 0) { sfx.growl(z.kind, vol, pan); this.growlGap = 0.3; }
+        v.growl = z.kind === 'runner' ? 1.5 + Math.random() * 2.5 : 3 + Math.random() * 5;
+      }
+      if (z.speed > 0.3 && d < 7) near.push([d, z]);
+    }
+    // Footsteps: only the two nearest walkers (a crowd would be mush), one step per ~0.7 m.
+    near.sort((a, b) => a[0] - b[0]);
+    for (let i = 0; i < Math.min(2, near.length); i++) {
+      const [d, z] = near[i], v = this.voices.get(z)!;
+      v.step -= dt * z.speed / 0.7;
+      if (v.step <= 0) {
+        v.step = 1;
+        sfx.step(Math.pow(1 - d / 7, 1.3), Math.max(-0.9, Math.min(0.9, (z.x - p.x) / 9)), z.kind === 'brute');
+      }
+    }
+    this.moanT -= dt;
+    if (this.moanT <= 0) { sfx.distantMoan(Math.random() * 1.6 - 0.8); this.moanT = 9 + Math.random() * 10; }
+    // Heartbeat below 35% health: faster and louder the lower it gets.
+    const h = p.health / p.maxHealth;
+    if (p.alive && h < 0.35) {
+      this.beatT -= dt;
+      if (this.beatT <= 0) { sfx.heartbeat(0.6 + (0.35 - h)); this.beatT = 0.45 + h * 1.6; }
+    } else this.beatT = 0;
+  }
+
   /** Burning wreck: rising flame cubes, a few embers and dark smoke (rate-based, frame-rate independent). */
   private updateFires(dt: number): void {
     this.fireT += dt * 45;
@@ -765,6 +816,7 @@ export class Game {
     for (let i = warn; i < this.dangerZones.length; i++) this.dangerZones[i].visible = false;
 
     this.updateFires(frameDt);
+    this.updateAudio(frameDt);
     // Firelight flicker: layered sines + a little noise.
     this.fireLight.intensity = 22 * (0.75 + 0.15 * Math.sin(this.time * 11) + 0.1 * Math.sin(this.time * 23.7) + Math.random() * 0.12);
     this.blastLight.update(frameDt);

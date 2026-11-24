@@ -29,7 +29,16 @@ export class Sfx {
     return { ctx: this.ctx, master: this.master, noise: this.noise };
   }
 
-  private burst(dur: number, freq: number, q: number, gain: number, type: BiquadFilterType = 'lowpass', delay = 0): void {
+  /** Output for one sound: straight to the master, or through a stereo panner (-1 left … 1 right). */
+  private out(a: { ctx: AudioContext; master: GainNode }, pan: number): AudioNode {
+    if (!pan || !a.ctx.createStereoPanner) return a.master;
+    const p = a.ctx.createStereoPanner();
+    p.pan.value = Math.max(-1, Math.min(1, pan));
+    p.connect(a.master);
+    return p;
+  }
+
+  private burst(dur: number, freq: number, q: number, gain: number, type: BiquadFilterType = 'lowpass', delay = 0, pan = 0): void {
     const a = this.live();
     if (!a) return;
     const t = a.ctx.currentTime + delay;
@@ -41,12 +50,12 @@ export class Sfx {
     const g = a.ctx.createGain();
     g.gain.setValueAtTime(gain, t);
     g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-    src.connect(f).connect(g).connect(a.master);
+    src.connect(f).connect(g).connect(this.out(a, pan));
     src.start(t, Math.random() * 0.3);
     src.stop(t + dur + 0.02);
   }
 
-  private tone(freq: number, endFreq: number, dur: number, gain: number, type: OscillatorType = 'sine', delay = 0): void {
+  private tone(freq: number, endFreq: number, dur: number, gain: number, type: OscillatorType = 'sine', delay = 0, pan = 0): void {
     const a = this.live();
     if (!a) return;
     const t = a.ctx.currentTime + delay;
@@ -57,7 +66,7 @@ export class Sfx {
     const g = a.ctx.createGain();
     g.gain.setValueAtTime(gain, t);
     g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-    o.connect(g).connect(a.master);
+    o.connect(g).connect(this.out(a, pan));
     o.start(t);
     o.stop(t + dur + 0.02);
   }
@@ -113,5 +122,87 @@ export class Sfx {
   dry(): void { this.burst(0.03, 4000, 4, 0.3, 'bandpass'); }
   reloadStart(): void { this.burst(0.05, 1800, 6, 0.35, 'bandpass'); this.burst(0.04, 1200, 6, 0.3, 'bandpass', 0.12); }
   reloadEnd(): void { this.burst(0.05, 2500, 6, 0.4, 'bandpass'); this.tone(900, 700, 0.04, 0.12, 'square', 0.05); }
+  // ── Horror audio (vol 0..1 from distance, pan -1..1 from screen side) ──
+
+  /**
+   * Throaty voice: two detuned saws gliding f0 → f1 through a resonant lowpass (the "mouth"),
+   * a slow wobble, plus breathy rasp. All zombie vocals are built from this.
+   */
+  private voice(f0: number, f1: number, dur: number, gain: number, cutoff: number, rasp: number, pan: number): void {
+    const a = this.live();
+    if (!a || gain < 0.01) return;
+    const t = a.ctx.currentTime, out = this.out(a, pan);
+    const f = a.ctx.createBiquadFilter();
+    f.type = 'lowpass'; f.Q.value = 6;
+    f.frequency.setValueAtTime(cutoff * 0.6, t);
+    f.frequency.linearRampToValueAtTime(cutoff, t + dur * 0.3);
+    f.frequency.linearRampToValueAtTime(cutoff * 0.5, t + dur);
+    const g = a.ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(gain, t + Math.min(0.12, dur * 0.25));
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    f.connect(g).connect(out);
+    for (const det of [0, 6 + Math.random() * 5]) {
+      const o = a.ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.setValueAtTime(f0 + det, t);
+      o.frequency.linearRampToValueAtTime((f0 + f1) / 2 + det * 1.4, t + dur * 0.4);
+      o.frequency.linearRampToValueAtTime(f1 + det, t + dur);
+      o.connect(f);
+      o.start(t); o.stop(t + dur + 0.05);
+    }
+    if (rasp > 0) this.burst(dur * 0.9, cutoff * 1.6, 1.2, gain * rasp, 'bandpass', 0, pan);
+  }
+
+  /** A zombie's idle growl / moan, per type. */
+  growl(kind: string, vol: number, pan: number): void {
+    const r = Math.random();
+    if (kind === 'brute') this.voice(55 + r * 10, 42, 1.1 + r * 0.4, 0.5 * vol, 420, 0.5, pan);
+    else if (kind === 'runner') this.voice(190 + r * 40, 140, 0.45 + r * 0.2, 0.2 * vol, 1500, 0.8, pan);
+    else if (kind === 'exploder') { this.voice(95 + r * 15, 70, 0.9, 0.35 * vol, 650, 0.3, pan); this.burst(0.5, 260, 6, 0.3 * vol, 'bandpass', 0.2, pan); } // wet gurgle
+    else this.voice(85 + r * 25, 65 + r * 10, 0.8 + r * 0.5, 0.4 * vol, 700, 0.5, pan);
+  }
+
+  /** Sharp snarl when a zombie starts its swing: the audio cue to dodge. */
+  snarl(vol: number, pan: number): void {
+    this.voice(150 + Math.random() * 30, 230, 0.32, 0.6 * vol, 1800, 1, pan);
+  }
+
+  /** Dragging, shuffling footstep. */
+  step(vol: number, pan: number, heavy = false): void {
+    this.burst(heavy ? 0.12 : 0.08, heavy ? 260 : 520, 1.5, (heavy ? 0.75 : 0.45) * vol, 'lowpass', 0, pan);
+  }
+
+  /** A distant, reverb-ish moan somewhere in the dark. */
+  distantMoan(pan: number): void {
+    this.voice(70 + Math.random() * 20, 55, 2.2, 0.12, 380, 0.25, pan);
+  }
+
+  /** Heartbeat (low health): lub-dub. */
+  heartbeat(vol: number): void {
+    this.tone(62, 48, 0.12, 0.7 * vol);
+    this.tone(55, 42, 0.14, 0.5 * vol, 'sine', 0.17);
+  }
+
+  /** Looping low wind drone (started once). */
+  private ambience: AudioBufferSourceNode | null = null;
+  startAmbience(): void {
+    const a = this.live();
+    if (!a || this.ambience) return;
+    const src = a.ctx.createBufferSource();
+    src.buffer = a.noise; src.loop = true; src.playbackRate.value = 0.35;
+    const f = a.ctx.createBiquadFilter();
+    f.type = 'lowpass'; f.frequency.value = 320; f.Q.value = 0.7;
+    const g = a.ctx.createGain();
+    g.gain.value = 0.07;
+    // Slow gusts.
+    const lfo = a.ctx.createOscillator(), depth = a.ctx.createGain();
+    lfo.frequency.value = 0.09; depth.gain.value = 0.04;
+    lfo.connect(depth).connect(g.gain);
+    src.connect(f).connect(g).connect(a.master);
+    src.start(); lfo.start();
+    this.ambience = src;
+  }
+
   casing(): void { this.tone(4200 + Math.random() * 1200, 3800, 0.05, 0.05, 'triangle', 0.25 + Math.random() * 0.1); }
 }

@@ -40,7 +40,7 @@ export class Flashlight {
 
   constructor(scene: THREE.Scene, quality: QualityPreset, private readonly physics: PhysicsWorld) {
     const F = FLASHLIGHT;
-    this.spot = new THREE.SpotLight(0xffd88a, F.intensity, F.range, F.angle, F.penumbra, 1.6);
+    this.spot = new THREE.SpotLight(0xf2f5ff, F.intensity, F.range, F.angle, F.penumbra, 1.6);
     this.spot.castShadow = quality.shadows;
     const sz = quality.name === 'mobile' ? 512 : 1024;
     this.spot.shadow.mapSize.set(sz, sz);
@@ -55,7 +55,7 @@ export class Flashlight {
     // its length and toward its silhouette edges, so it reads as light in the air, not a solid.
     const geo = new THREE.ConeGeometry(1, 1, 64, 1, true).translate(0, -0.5, 0).rotateX(-Math.PI / 2);
     const mat = new THREE.ShaderMaterial({
-      uniforms: { uStrength: { value: F.beamStrength }, uColor: { value: new THREE.Color(0xffd27a) } },
+      uniforms: { uStrength: { value: F.beamStrength }, uColor: { value: new THREE.Color(0xe8eeff) } },
       vertexShader: /* glsl */`
         varying float vT; varying vec3 vN; varying vec3 vView;
         void main() {
@@ -88,8 +88,8 @@ export class Flashlight {
     this.beam = new THREE.Group();
     // Glowing lens: a hot core inside a soft warm halo (additive, at the beam origin).
     const lensMat = (c: number) => new THREE.MeshBasicMaterial({ color: c, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
-    const halo = new THREE.Mesh(new THREE.IcosahedronGeometry(0.16, 1), lensMat(0x6a4a14));
-    const core = new THREE.Mesh(new THREE.IcosahedronGeometry(0.055, 1), lensMat(0xfff2c0));
+    const halo = new THREE.Mesh(new THREE.IcosahedronGeometry(0.16, 1), lensMat(0x4a4e58));
+    const core = new THREE.Mesh(new THREE.IcosahedronGeometry(0.055, 1), lensMat(0xffffff));
     this.beam.add(this.cone, this.dust, halo, core);
     scene.add(this.beam);
   }
@@ -127,7 +127,7 @@ export class Flashlight {
       const sz = 0.022 + 0.012 * Math.sin(i * 7.1);
       this.dust.setMatrixAt(i, m4.compose(v.set(Math.cos(a) * rad, Math.sin(a) * rad + Math.sin(this.time + i) * 0.05, zz), q, s.set(sz, sz, sz)));
       const b = 0.5 * (1 - t) * (0.6 + 0.4 * Math.sin(this.time * 2 + i * 3.7));
-      this.dust.setColorAt(i, col.setRGB(b, b * 0.92, b * 0.8));
+      this.dust.setColorAt(i, col.setRGB(b, b, b));
     }
     this.dust.instanceMatrix.needsUpdate = true;
     this.dust.instanceColor!.needsUpdate = true;
