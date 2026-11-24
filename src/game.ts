@@ -24,8 +24,8 @@ import { rollUpgrades, type Upgrade } from './systems/upgrades';
 import { Renderer } from './render/renderer';
 import { HumanoidRig, SURVIVOR_LOOK } from './render/humanoidRig';
 import { Flashlight } from './render/flashlight';
-import { BulletHoles, MuzzleFlash, ParticleSystem } from './render/effects';
-import { buildArena, spawnBarrel, FIRES, type DynamicProp } from './world/arena';
+import { BulletHoles, MuzzleFlash, ParticleSystem, PulseLight } from './render/effects';
+import { buildArena, spawnBarrel, FIRES, FLICKER_LAMP, type DynamicProp } from './world/arena';
 import { Hud } from './ui/hud';
 import { DebugOverlay } from './ui/debugOverlay';
 import type { WeaponEvent } from './weapons/weapon';
@@ -129,6 +129,9 @@ export class Game {
   private readonly impacts: import('./entities/zombieManager').ImpactResult[] = [];
   private thudCooldown = 0;
   private fireT = 0; // flame emission accumulator (burning wreck)
+  /** Explosion flash (one pooled light) and the burning wreck's flickering firelight. */
+  private readonly blastLight: PulseLight;
+  private readonly fireLight: THREE.PointLight;
   private readonly hitMarker = document.getElementById('hitmarker')!;
   private hitMarkerT = 0;
   private readonly retMat: THREE.MeshBasicMaterial;
@@ -177,6 +180,10 @@ export class Game {
     this.bulletViews = new BulletViews(scene);
     this.vfx = new WeaponVfx(scene, this.sparks);
     this.flashlight = new Flashlight(scene, quality, this.physics);
+    this.blastLight = new PulseLight(scene, 0xffa04a, 20);
+    this.fireLight = new THREE.PointLight(0xff8a3a, 0, 11, 1.4);
+    this.fireLight.position.set(FIRES[0][0], FIRES[0][1] + 1, FIRES[0][2]);
+    scene.add(this.fireLight);
     this.blood = new BulletHoles(scene, quality.name === 'mobile' ? 40 : 80, 0x5c070a, 0.32, 30, 0.8);
     scene.add(this.sparks.mesh, this.debris.mesh);
 
@@ -703,6 +710,7 @@ export class Game {
           0.06 + Math.random() * 0.1, 2, 0x6e6b66, 0.3, 14, 0.5);
       }
       this.holes.add(e.x, 0.005, e.z, 0, 1, 0); // scorch mark
+      this.blastLight.fire(e.x, 1.5, e.z, 600, 0.45); // the blast lights up the night
     });
     ev.on('activeReload', (e) => this.sfx.activeReload(e.success));
     ev.on('dryFire', () => this.sfx.dry());
@@ -757,6 +765,11 @@ export class Game {
     for (let i = warn; i < this.dangerZones.length; i++) this.dangerZones[i].visible = false;
 
     this.updateFires(frameDt);
+    // Firelight flicker: layered sines + a little noise.
+    this.fireLight.intensity = 22 * (0.75 + 0.15 * Math.sin(this.time * 11) + 0.1 * Math.sin(this.time * 23.7) + Math.random() * 0.12);
+    this.blastLight.update(frameDt);
+    // The last working lamp: mostly on, with nervous dropouts.
+    FLICKER_LAMP.emissiveIntensity = Math.sin(this.time * 0.7) > 0.6 && Math.random() < 0.35 ? 0.05 : 0.9 + Math.random() * 0.1;
     this.flash.update(frameDt);
     this.bulletViews.update(this.bullets, alpha);
     this.vfx.update(this.bullets, alpha, frameDt);

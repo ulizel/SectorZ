@@ -8,6 +8,9 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 /** Burning wreck fire sources (x, y, z): the game emits flames, embers and smoke there each frame. */
 export const FIRES: [number, number, number][] = [[-4.5, 1.1, -18.5]];
 
+/** The one lamp post still (barely) working: the game flickers this material's glow. */
+export const FLICKER_LAMP = new THREE.MeshLambertMaterial({ color: PAL.lamp, emissive: PAL.lamp });
+
 export interface DynamicProp {
   body: RAPIER.RigidBody;
   mesh: THREE.Object3D;
@@ -116,10 +119,13 @@ export function buildArena(scene: THREE.Scene, physics: PhysicsWorld, seed = 7):
   scene.add(inst);
 
   // Lamp posts with warm emissive heads (cheap "light", no real point lights).
-  for (const [x, z] of [[-15, 0], [15, 0], [0, -17], [0, 17]] as const) {
+  // Night: the lamps are dead except one that flickers (FLICKER_LAMP).
+  for (const [x, z, alive] of [[-15, 0, 0], [15, 0, 1], [0, -17, 0], [0, 17, 0]] as const) {
     scene.add(box(0.18, 3.2, 0.18, PAL.metal, x, 1.6, z));
     scene.add(box(0.5, 0.18, 0.5, PAL.metal, x, 3.25, z));
-    scene.add(box(0.36, 0.08, 0.36, PAL.lamp, x, 3.14, z, PAL.lamp));
+    const head = box(0.36, 0.08, 0.36, alive ? PAL.lamp : 0x3a3a36, x, 3.14, z);
+    if (alive) head.material = FLICKER_LAMP;
+    scene.add(head);
     addStatic(x, 1.6, z, 0.2, 3.2, 0.2, 0, false, 'metal');
   }
 
